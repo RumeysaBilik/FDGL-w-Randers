@@ -285,6 +285,52 @@ def compute_drift(N: np.ndarray, knn_mask: np.ndarray, k: int,
     return b
 
 
+def _compute_drift_scaled(N: np.ndarray, knn_mask: np.ndarray, k: int,
+                           Y: np.ndarray, clip_delta: float,
+                           magnitude_target: np.ndarray = None,
+                           eps: float = 1e-8) -> np.ndarray:
+    """
+    Wraps compute_drift()
+    with an optional per-node MAGNITUDE replacement, while keeping its
+    live, Y-dependent DIRECTION untouched.
+
+    Motivation: compute_drift()'s own magnitude is, by construction, a
+    "how aligned are i's neighbour DIRECTIONS in the CURRENT embedding"
+    score (a weighted average of unit vectors e_ij(Y)) -- it is NOT
+    directly the underlying data's asymmetry strength. As training
+    reshapes Y (especially once the swiss-roll-style manifold unrolls and
+    forces start pulling along the drift direction itself), this
+    alignment can self-reinforce epoch over epoch, growing toward the
+    clip_delta ceiling even though the true DATA asymmetry (N, fixed,
+    never changes) hasn't grown at all -- see project discussion.
+
+    magnitude_target : (n,) array or None, typically
+        randers_bridge.asymmetry_score()'s per-node output on the SAME
+        D_asym used to build N here -- a FIXED, Y-independent, per-node
+        scalar in [0, 1) that only reflects the real data's asymmetry
+        around node i, immune to the live-alignment feedback loop above.
+        If given, b_i's magnitude is replaced with magnitude_target[i]
+        every time this is called (still every epoch, so DIRECTION stays
+        fully live), instead of whatever compute_drift() itself computed.
+        If None (default), this is an exact no-op -- returns
+        compute_drift()'s own output unchanged.
+
+    Note: magnitude_target typically comes from asymmetry_score() applied
+    to bln (compute_dist_matrix's RAW graph edges), which is not
+    necessarily the identical neighbour set as knn_mask here (built from
+    D_asym's own row-wise k-nearest, post-shortest-path) -- both are
+    derived from the same underlying D_asym though, so they correlate
+    strongly; exact set equality is not required for this to be a
+    meaningful per-node magnitude reference.
+    """
+    raw_b = compute_drift(N, knn_mask, k, Y, clip_delta=clip_delta)
+    if magnitude_target is None:
+        return raw_b
+    bnorm = np.linalg.norm(raw_b, axis=1, keepdims=True)
+    direction = raw_b / np.maximum(bnorm, eps)
+    return magnitude_target[:, np.newaxis] * direction
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Main fit: force-directed layout with the drift folded into rho
 #    [UMAP Section 3.2 forces, OURS: rho/g_ij replace UMAP's plain d/e_ij]
@@ -309,6 +355,11 @@ def randers_umap_fit(
     node_mass: np.ndarray = None,
     gravity_strength: float = 1.0,
     gravity_neighbor_weight: bool = True,
+    randers_attractive: bool = True,
+    randers_repulsive: bool = False,
+    randers_gravity: bool = False,
+    drift_magnitude_target: np.ndarray = None,
+    scale_B_fixed_by_knn_distance: bool = False,
     use_virtual_neighbor: bool = False,
     norm_mode: str = "relative",
     ramp: bool = True,
@@ -436,6 +487,91 @@ def randers_umap_fit(
     node_mass : [OURS 2026-08-06] (n,) per-node mass M[i], used only if
         use_gravity=True. None (default) uses M[i]=1 for all nodes (uniform).
 
+    randers_attractive, randers_repulsive : [OURS 2026-08-24, per explicit
+        user request] bool, both default True (reproduces prior behaviour
+        exactly). INDEPENDENT Randers-vs-Euclidean switches for the main
+        force's attractive and repulsive terms respectively (Section 5's
+        attr_coeff and rep_coeff) -- separate from use_drift, which
+        controls whether B is computed AT ALL, and from each other, so
+        e.g. randers_attractive=True, randers_repulsive=False runs
+        attraction through the Randers-perturbed metric while repulsion
+        stays plain Euclidean (or the reverse).
+
+        Two independent (rho, g) pairs are built every epoch:
+            rho_r = d_mat + b_i.(y_j-y_i), g_r = e + b_i    [Randers/OURS]
+            rho_e = d_mat,                 g_e = e           [Euclidean/vanilla UMAP]
+        attr_coeff is evaluated at (rho_r, g_r) if randers_attractive
+        else (rho_e, g_e); rep_coeff independently at (rho_r, g_r) if
+        randers_repulsive else (rho_e, g_e). True/True is exactly the
+        original single-rho/g behaviour (rho_r used for both, as before
+        this flag existed). False/False even with B nonzero (e.g.
+        because use_gravity or use_virtual_neighbor still need it)
+        decouples "is a drift vector computed" from "does the main force
+        see it" -- e.g. you can run randers_attractive=randers_repulsive=
+        False, use_gravity=True, randers_gravity=True to isolate the
+        drift's effect entirely inside gravity, with the main UMAP layout
+        forces staying plain Euclidean.
+
+    randers_gravity : [OURS 2026-08-24, per explicit user request] bool,
+        default False (reproduces prior gravity behaviour exactly -- the
+        plain linear gamma*M[i]*b_i term this project has used since
+        2026-08-06/17). Only relevant when use_gravity=True. Per explicit
+        user choice, "Randers" here means: treat i's own virtual target
+        xi_i = y_i + b_i as a pseudo-edge and run it through the EXACT
+        SAME rho/g construction and attr_coeff curve as the main force
+        above (Section 5), rather than gravity's original ad-hoc linear
+        term:
+            diff_v = xi_i - y_i = b_i
+            d_v    = ||b_i||
+            e_v    = b_i / ||b_i||
+            rho_v  = d_v + b_i.diff_v = ||b_i|| + ||b_i||^2   [same form as rho]
+            g_v    = e_v + b_i                                 [same form as g]
+            gravity_term_i = attr_coeff(rho_v) * g_v
+        (mu_virtual=1 throughout -- pure attraction, no repulsive
+        counterpart, matching how force_edges/use_virtual_neighbor treat
+        a guaranteed edge). This is a genuinely different formula from
+        use_virtual_neighbor's (which uses rho_v=||b_i|| with no +b_i.b_i
+        term, and force=attr_coeff_v*B directly, not g_v) -- the two
+        mechanisms may still be combined, they are just not the same math.
+        False (default off would be True->prior; here False reproduces
+        the ORIGINAL gravity formula): gravity_term_i = b_i, i.e. the
+        plain linear pull gamma*M[i]*b_i from before this flag existed.
+        gravity_strength and gravity_neighbor_weight (gamma, w_i) apply
+        identically to both branches -- only the vector being scaled
+        changes.
+
+    drift_magnitude_target :
+        (n,) array or None (default, no-op, exact prior behaviour). If
+        given, every b_i's magnitude is replaced with
+        drift_magnitude_target[i] every epoch, while DIRECTION stays fully
+        live (still recomputed from the current Y each epoch) -- see
+        _compute_drift_scaled() above for the exact mechanism and
+        motivation. Typically randers_bridge.asymmetry_score()'s per-node
+        output on the same D_asym, so magnitude reflects the FIXED,
+        Y-independent real data asymmetry around i instead of the live
+        unit-vector-alignment score compute_drift() would otherwise use,
+        which can self-reinforce/grow over epochs (see project
+        discussion). Only affects the use_drift=True / B_fixed=None path
+        -- ignored when B_fixed is given (that mechanism is already fully
+        frozen, magnitude included).
+
+    scale_B_fixed_by_knn_distance : [OURS 2026-08-25, per explicit user
+        bool, default False (no-op, exact
+        prior behaviour). Only relevant when B_fixed is given. If True:
+        B_fixed's DIRECTION is frozen (computed once, before the loop,
+        exactly as before), but its MAGNITUDE is replaced every epoch
+        with node i's distance to its own k-th nearest neighbour in the
+        CURRENT (live) embedding Y -- i.e. the drift's length always
+        matches the local neighbourhood scale as Y evolves, instead of
+        being frozen or asymmetry-derived. Reuses the exact same
+        nearest_k/argpartition mechanism gravity_neighbor_weight already
+        uses below, but takes the FARTHEST of the k nearest (the true
+        k-th-nearest-neighbour distance) rather than gravity's own
+        NEAREST (1st) neighbour distance -- these are different
+        quantities, don't confuse the two. Mutually exclusive in effect
+        with drift_magnitude_target (that only applies to the
+        use_drift/B_fixed=None path).
+
     use_virtual_neighbor : [OURS 2026-08-20, per explicit user request] bool,
         default False. A DIFFERENT mechanism from use_gravity, not a
         variant of it -- both may be independently enabled, though they are
@@ -549,6 +685,16 @@ def randers_umap_fit(
     M = np.ones(n) if node_mass is None else np.asarray(node_mass, dtype=np.float64)
     eps = 1e-8
 
+    # [OURS 2026-08-25, per explicit user request] precompute B_fixed's own
+    # FIXED unit direction once, outside the loop -- only its magnitude gets
+    # replaced every epoch when scale_B_fixed_by_knn_distance=True, the
+    # direction itself is exactly as located, never touched again.
+    B_fixed_direction = None
+    if B_fixed is not None and scale_B_fixed_by_knn_distance:
+        B_fixed_arr = np.asarray(B_fixed, dtype=np.float64)
+        bn_fixed = np.linalg.norm(B_fixed_arr, axis=1, keepdims=True)
+        B_fixed_direction = B_fixed_arr / np.maximum(bn_fixed, eps)
+
     # [OURS 2026-08-11] snapshot capture -- mirrors finsler_mds_joint.py's
     # snapshot_every: records the embedding every N epochs so the whole
     # training trajectory (init -> ... -> final) can be plotted side by
@@ -572,7 +718,21 @@ def randers_umap_fit(
     if snapshot_every is not None:
         if B_fixed is None and use_drift:
             s0 = 0.0 if ramp else 1.0
-            B_snap0 = s0 * compute_drift(N, drift_mask, n_neighbors, Y_init, clip_delta=clip_delta)
+            B_snap0 = s0 * _compute_drift_scaled(N, drift_mask, n_neighbors, Y_init, clip_delta,
+                                                  magnitude_target=drift_magnitude_target)
+        elif B_fixed is not None and scale_B_fixed_by_knn_distance:
+            # [OURS 2026-08-25] mirror the same epoch-0-readiness fix above --
+            # compute the k-th-nn-distance-scaled magnitude at Y_init too,
+            # instead of showing the raw/unscaled B_fixed placeholder.
+            s0 = 0.0 if ramp else 1.0
+            k_local0 = min(n_neighbors, n - 1)
+            diff0 = Y_init[np.newaxis, :, :] - Y_init[:, np.newaxis, :]
+            d_mat0 = np.maximum(np.sqrt((diff0 ** 2).sum(-1)), eps)
+            d_self_excl0 = d_mat0.copy()
+            np.fill_diagonal(d_self_excl0, np.inf)
+            nearest_k0 = np.partition(d_self_excl0, k_local0 - 1, axis=1)[:, :k_local0]
+            kth_dist0 = nearest_k0.max(axis=1)
+            B_snap0 = s0 * kth_dist0[:, np.newaxis] * B_fixed_direction
         else:
             B_snap0 = B.copy()
         snapshots.append({"epoch": 0, "Y": Y_init.copy(), "B": B_snap0})
@@ -589,9 +749,13 @@ def randers_umap_fit(
     if verbose:
         mode_str = "B_fixed (frozen)" if B_fixed is not None else f"use_drift={use_drift}"
         grav_str = (f"  +gravity(gamma={gravity_strength}, "
-                    f"nbr_weight={gravity_neighbor_weight})" if use_gravity else "")
+                    f"nbr_weight={gravity_neighbor_weight}, "
+                    f"randers={randers_gravity})" if use_gravity else "")
         vn_str = "  +virtual_neighbor(k+1, UMAP curve)" if use_virtual_neighbor else ""
-        print(f"\n-- Randers-UMAP (Part A)  n={n} d={d} k={n_neighbors}  {mode_str}{grav_str}{vn_str} --")
+        rf_str = "" if (randers_attractive and randers_repulsive) else \
+            f"  [main force: attr={'randers' if randers_attractive else 'euclid'}, " \
+            f"rep={'randers' if randers_repulsive else 'euclid'}]"
+        print(f"\n-- Randers-UMAP (Part A)  n={n} d={d} k={n_neighbors}  {mode_str}{grav_str}{vn_str}{rf_str} --")
         print(f"   a={a:.4f} b={b_param:.4f}  (min_dist={min_dist}, spread={spread})")
 
     for epoch in range(n_epochs):
@@ -607,28 +771,57 @@ def randers_umap_fit(
         else:
             s = 1.0
 
-        if B_fixed is not None:
-            B = s * np.asarray(B_fixed, dtype=np.float64)
-        elif use_drift:
-            B = s * compute_drift(N, drift_mask, n_neighbors, Y, clip_delta=clip_delta)
-        # else: use_drift=False -> B stays all-zeros -> rho=d, g=e -> vanilla UMAP
-
+        # [OURS 2026-08-25] diff/d_mat/e only depend on the CURRENT Y, not on
+        # B -- moved ahead of the B assignment below so
+        # scale_B_fixed_by_knn_distance can reuse this epoch's live d_mat
+        # for its k-th-nearest-neighbour distance lookup (same reasoning as
+        # gravity_neighbor_weight's own reuse of d_mat further down).
         diff = Y[np.newaxis, :, :] - Y[:, np.newaxis, :]     # (n,n,d) y_j-y_i
         d_mat = np.maximum(np.sqrt((diff ** 2).sum(-1)), eps)
         e = diff / d_mat[:, :, np.newaxis]
 
-        raw_dot = (B[:, np.newaxis, :] * diff).sum(-1)       # b_i . (y_j-y_i)
-        rho = np.maximum(d_mat + raw_dot, eps)                # [OURS Eq. 2]
-        g = e + B[:, np.newaxis, :]                           # [OURS Eq. 3 (sign folded into force below)]
+        if B_fixed is not None:
+            if scale_B_fixed_by_knn_distance:
+                # [OURS 2026-08-25, per explicit user request] magnitude =
+                # live distance to i's k-th nearest neighbour in Y (the
+                # FARTHEST of the k nearest, i.e. max of the k smallest
+                # distances -- NOT gravity_neighbor_weight's rho_local,
+                # which takes the MIN/1st-nearest instead).
+                k_local = min(n_neighbors, n - 1)
+                d_self_excl = d_mat.copy()
+                np.fill_diagonal(d_self_excl, np.inf)
+                nearest_k = np.partition(d_self_excl, k_local - 1, axis=1)[:, :k_local]
+                kth_dist = nearest_k.max(axis=1)
+                B = s * kth_dist[:, np.newaxis] * B_fixed_direction
+            else:
+                B = s * np.asarray(B_fixed, dtype=np.float64)
+        elif use_drift:
+            B = s * _compute_drift_scaled(N, drift_mask, n_neighbors, Y, clip_delta,
+                                          magnitude_target=drift_magnitude_target)
+        # else: use_drift=False -> B stays all-zeros -> rho=d, g=e -> vanilla UMAP
 
-        rho2b = rho ** (2 * b_param)
-        denom = 1.0 + a * rho2b
+        # [OURS 2026-08-24, per explicit user request] independent
+        # Randers/Euclidean choice for attraction vs repulsion -- two
+        # (rho, g) pairs, attr_coeff and rep_coeff each pick their own.
+        raw_dot = (B[:, np.newaxis, :] * diff).sum(-1)        # b_i . (y_j-y_i)
+        rho_r = np.maximum(d_mat + raw_dot, eps)               # [OURS Eq. 2]
+        g_r = e + B[:, np.newaxis, :]                          # [OURS Eq. 3]
+        rho_e = d_mat                                          # vanilla UMAP
+        g_e = e
 
-        attr_coeff = (2 * a * b_param * rho ** (2 * b_param - 1)) / denom
-        rep_coeff = (2 * b_param * rho) / ((eps + rho ** 2) * denom)
+        rho_attr, g_attr = (rho_r, g_r) if randers_attractive else (rho_e, g_e)
+        rho_rep, g_rep = (rho_r, g_r) if randers_repulsive else (rho_e, g_e)
 
-        force = (mu * attr_coeff)[:, :, np.newaxis] * g \
-                - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g
+        rho2b_attr = rho_attr ** (2 * b_param)
+        attr_coeff = (2 * a * b_param * rho_attr ** (2 * b_param - 1)) / (1.0 + a * rho2b_attr)
+
+        rho2b_rep = rho_rep ** (2 * b_param)
+        rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
+
+        rho = rho_r  # [OURS] kept for the epoch-diagnostic residual print below
+
+        force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
+                - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
         np.fill_diagonal(force[:, :, 0], 0.0)
         if d > 1:
             for dd in range(1, d):
@@ -661,7 +854,27 @@ def randers_umap_fit(
                 w_grav = np.exp(-np.maximum(0.0, bnorm - rho_local) / sigma_local)
             else:
                 w_grav = np.ones(n)
-            step = step + gravity_strength * w_grav[:, np.newaxis] * M[:, np.newaxis] * B
+
+            if randers_gravity:
+                # [OURS 2026-08-24, per explicit user request] run gravity's
+                # pseudo-edge (i, xi_i=y_i+b_i) through the EXACT SAME
+                # rho/g/attr_coeff construction as the main force above,
+                # instead of a plain linear pull. diff_v=b_i by construction.
+                bnorm_g = np.linalg.norm(B, axis=1)
+                d_v = np.maximum(bnorm_g, eps)
+                e_v = B / d_v[:, np.newaxis]
+                raw_dot_v = bnorm_g ** 2                      # b_i . diff_v = b_i.b_i
+                rho_v = np.maximum(d_v + raw_dot_v, eps)      # same form as rho above
+                g_v = e_v + B                                  # same form as g above
+                rho2b_v = rho_v ** (2 * b_param)
+                attr_coeff_v_g = (2 * a * b_param * rho_v ** (2 * b_param - 1)) / (1.0 + a * rho2b_v)
+                gravity_term = attr_coeff_v_g[:, np.newaxis] * g_v
+            else:
+                # [OURS 2026-08-24] randers_gravity=False -- original,
+                # pre-toggle gravity formula: plain linear pull along b_i.
+                gravity_term = B
+
+            step = step + gravity_strength * w_grav[:, np.newaxis] * M[:, np.newaxis] * gravity_term
 
         # [OURS 2026-08-20, per explicit user request] virtual-neighbor --
         # each node's own xi_i = y_i + b_i is an UNCONDITIONAL (k+1)-th
@@ -693,8 +906,29 @@ def randers_umap_fit(
                   f"lr={cur_lr:.4f}")
 
     if B_fixed is None and use_drift:
-        B = compute_drift(N, drift_mask, n_neighbors, Y, clip_delta=clip_delta)
-    # else B_fixed: leave B exactly as given -- it was never touched by the loop
+        B = _compute_drift_scaled(N, drift_mask, n_neighbors, Y, clip_delta,
+                                  magnitude_target=drift_magnitude_target)
+    elif B_fixed is not None and scale_B_fixed_by_knn_distance:
+        # [OURS 2026-08-25 FIX] same staleness issue the use_drift branch
+        # above already guards against: B computed inside the loop's last
+        # iteration is based on Y BEFORE that iteration's own update step,
+        # so it lags one step behind the Y actually being returned here.
+        # Harmless when B_fixed's magnitude is constant (old behaviour),
+        # but scale_B_fixed_by_knn_distance's whole point is for B's
+        # magnitude to match the CURRENT/final Y -- recompute once more
+        # against the true final Y so the returned (Y, B) pair is
+        # consistent (verified empirically: without this, ||B|| vs the
+        # final Y's own k-th-nn distance differed by up to ~0.4).
+        k_local = min(n_neighbors, n - 1)
+        d_mat_final = np.maximum(np.sqrt(((Y[np.newaxis, :, :] - Y[:, np.newaxis, :]) ** 2).sum(-1)), eps)
+        d_self_excl = d_mat_final.copy()
+        np.fill_diagonal(d_self_excl, np.inf)
+        nearest_k = np.partition(d_self_excl, k_local - 1, axis=1)[:, :k_local]
+        kth_dist = nearest_k.max(axis=1)
+        B = kth_dist[:, np.newaxis] * B_fixed_direction
+    # else B_fixed, scale_B_fixed_by_knn_distance=False: B already holds the
+    # raw B_fixed value untouched, unaffected by any staleness (constant
+    # magnitude the whole run) -- nothing more to do here.
 
     if snapshot_every is not None and snapshots[-1]["epoch"] != n_epochs:
         snapshots.append({"epoch": n_epochs, "Y": Y.copy(), "B": B.copy()})

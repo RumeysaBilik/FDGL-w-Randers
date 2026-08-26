@@ -94,7 +94,8 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       gravity_strength=1.0, gravity_neighbor_weight=True,
                       use_virtual_neighbor=False, proj_dim=2, adjacency="threshold",
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
-                      apply_step=True, init_method="isomap"):
+                      apply_step=True, init_method="isomap",
+                      normalize_drift_by_asymmetry=False):
     """
     The full two-step pipeline, factored out so both main() (CLI/plotting)
     and test.py (diagnostics) call the exact same code -- no duplication.
@@ -137,6 +138,23 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         result isn't what we usually want to watch evolve) -- captures Y
         every snapshot_every epochs, from the initial Y_real0 through to
         the final embedding, for a "training trajectory" plot.
+
+    normalize_drift_by_asymmetry : [OURS 2026-08-25, per explicit user
+        request -- "default eskisi gibi normalize edilmeden olsun, --normalize
+        flagi verirsek normalize etsin", later changed to "direkt kth nearest
+        neighbouruna gore yapicaz"] bool, default False (off -- exact prior
+        behaviour, B_located used as-is, frozen direction AND magnitude for
+        the whole run). If True: B_located's DIRECTION stays exactly as
+        located, but its MAGNITUDE is replaced every epoch with that node's
+        LIVE distance to its own k-th nearest neighbour in the current
+        embedding Y -- forwarded to randers_umap_fit as
+        scale_B_fixed_by_knn_distance (see its docstring there for the
+        exact mechanism; this needs the live, epoch-by-epoch Y, so it can't
+        be precomputed here before training starts, unlike the earlier
+        asymmetry_score-based version this replaced). asym_per_node/
+        asym_global (below) remain always-computed diagnostics either way,
+        just no longer used to set B's length when this flag is off... or
+        on, now -- they're purely informational now regardless.
 
     apply_step : [OURS 2026-08-13] bool, default True. If False, skip STEP 2
         entirely -- no D_asym build, no force-directed training -- and
@@ -217,6 +235,19 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
               f"(mean |d_ij-d_ji| / mean-dist, averaged over each node's real "
               f"neighbours, then over all nodes -- 0 = fully symmetric)")
 
+    # [OURS 2026-08-25, per explicit user request -- "normalizasyonu
+    # degistirip direkt kth nearest neighbouruna gore yapicaz"] default
+    # False = exact prior behaviour, B_located used as-is (frozen
+    # direction AND magnitude for the whole run). True: B_located's
+    # DIRECTION stays exactly as located, but its MAGNITUDE is replaced,
+    # EVERY EPOCH, with that node's live distance to its own k-th nearest
+    # neighbour in the CURRENT embedding Y -- handled entirely inside
+    # randers_umap_fit's own loop via scale_B_fixed_by_knn_distance (see
+    # its docstring there for the exact mechanism), since this needs the
+    # LIVE, epoch-by-epoch Y, not a one-time value computable here before
+    # training even starts. This REPLACES the previous asymmetry_score-
+    # based magnitude target (kept only as the always-computed diagnostic
+    # asym_per_node/asym_global below, no longer used to set B's length).
     out2 = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
                             n_epochs=epochs, use_drift=True, d=proj_dim,
                             B_fixed=B_located, Y_init_override=Y_real0,
@@ -224,6 +255,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                             gravity_neighbor_weight=gravity_neighbor_weight,
                             use_virtual_neighbor=use_virtual_neighbor, ramp=ramp,
                             snapshot_every=snapshot_every,
+                            scale_B_fixed_by_knn_distance=normalize_drift_by_asymmetry,
                             clip_delta=clip_delta, seed=seed, verbose=verbose)
     Y, B = out2["Y"], out2["B"]
 
@@ -309,6 +341,14 @@ def main():
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation, including why 'knn' reintroduces a second, "
                          "topology-driven source of asymmetry alongside the Randers term.")
+    p.add_argument("--normalize", action="store_true",
+                    help="[OURS 2026-08-25, per explicit user request] default OFF -- "
+                         "B_located used as-is (prior behaviour, unchanged). If given, "
+                         "replace each node's drift MAGNITUDE, every epoch, with its "
+                         "LIVE distance to its own k-th nearest neighbour in the "
+                         "current embedding, keeping its DIRECTION as located. See "
+                         "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
+                         "for the exact mechanism.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="swiss_embedding")
     p.add_argument("--quiet",  action="store_true")
@@ -347,7 +387,8 @@ def main():
                                proj_dim=args.proj_dim, adjacency=args.adjacency,
                                snapshot_every=args.snapshot_every, ramp=args.ramp,
                                seed=args.seed, verbose=not args.quiet,
-                               apply_step=not args.init_only, init_method=args.init_method)
+                               apply_step=not args.init_only, init_method=args.init_method,
+                               normalize_drift_by_asymmetry=args.normalize)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------

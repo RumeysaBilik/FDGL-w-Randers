@@ -134,6 +134,14 @@ def main():
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation. 'threshold' (default) = unchanged. 'knn' = TRUE "
                          "per-point k-nearest-neighbours membership, asymmetric in general.")
+    p.add_argument("--normalize", action="store_true",
+                    help="[OURS 2026-08-25, per explicit user request] default OFF -- "
+                         "B_located used as-is (prior behaviour, unchanged). If given, "
+                         "replace each node's drift MAGNITUDE, every epoch, with its "
+                         "LIVE distance to its own k-th nearest neighbour in the "
+                         "current embedding, keeping its DIRECTION as located. See "
+                         "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
+                         "for the exact mechanism.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="mammoth_embedding")
     p.add_argument("--quiet",  action="store_true")
@@ -206,7 +214,8 @@ def main():
                                use_virtual_neighbor=not args.no_virtual_neighbor,
                                proj_dim=args.proj_dim, adjacency=args.adjacency,
                                seed=args.seed, verbose=not args.quiet,
-                               apply_step=not args.init_only, init_method=args.init_method)
+                               apply_step=not args.init_only, init_method=args.init_method,
+                               normalize_drift_by_asymmetry=args.normalize)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
