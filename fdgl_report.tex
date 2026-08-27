@@ -1,0 +1,251 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}
+\usepackage{amssymb} % \mathbb{} (used in the MNIST section, e.g. \mathbb{R}^{n x 784}) -- amsmath alone does not define \mathbb
+\usepackage{placeins} % \FloatBarrier -- keeps figures from drifting past a section boundary
+\title{fdgl}
+\author{rümeysa bilik}
+\date{August 2026}
+\begin{document}
+\maketitle
+\section*{Asymmetry Score}
+$D_{\mathrm{asym}}$ is the Randers-perturbed geodesic distance matrix (asymmetric: $D_{\mathrm{asym}}[i,j]\neq D_{\mathrm{asym}}[j,i]$ in general), and $\mathrm{bln}[i,j]$ marks the real, directly constructed graph edges. The score is computed only over these direct neighbours, not all $n-1$ pairs. For node $i$ and each direct neighbour $j$ with $\mathrm{bln}[i,j]=\text{True}$:
+\[
+\mathrm{ratio}_{ij} \;=\; \frac{\left| D_{\mathrm{asym}}[i,j] - D_{\mathrm{asym}}[j,i] \right|}
+{D_{\mathrm{asym}}[i,j] + D_{\mathrm{asym}}[j,i]} \;\in\; [0,1)
+\]
+$\mathrm{ratio}_{ij}=0$ means the edge is perfectly symmetric ($D_{\mathrm{asym}}[i,j]=D_{\mathrm{asym}}[j,i]$); it approaches $1$ only when one direction's distance collapses to $0$ relative to the other.
+\[
+\mathrm{asym}_i \;=\; \frac{1}{|\mathcal{N}(i)|}\sum_{j \,\in\, \mathcal{N}(i)} \mathrm{ratio}_{ij},
+\qquad \mathcal{N}(i) = \{\, j : \mathrm{bln}[i,j]=\text{True},\ j\neq i \,\}
+\]
+\[
+\mathrm{asym}_{\mathrm{global}} \;=\; \frac{1}{n}\sum_{i=1}^{n} \mathrm{asym}_i
+\]
+$\mathrm{asym}_i$ is a \emph{mean} over $i$'s direct neighbours, not a sum -- this keeps the score in $[0,1)$ and comparable across different values of $k$. Table~\ref{tab:etiketli_tablo} reports $\mathrm{asym}_{\mathrm{global}}$ for the swiss-roll dataset across both adjacency rules and several values of $k$.
+\begin{table}[htbp]
+    \centering
+    \renewcommand{\arraystretch}{1.3}
+    \begin{tabular}{|l|c|c|c|c|c|}
+        \hline
+        & \textbf{k=10} & \textbf{k=20} & \textbf{k=30} & \textbf{k=40} & \textbf{k=50}  \\
+        \hline
+        \textbf{$\varepsilon$ threshold } & 0.3204 & 0.3206 & 0.3209 & 0.2985 & 0.2942\\
+        \hline
+        \textbf{$k$-nearest-neighbours} & 0.3212 & 0.3211 & 0.3211 & 0.3203 &0.3210 \\
+        \hline
+    \end{tabular}
+    \caption{asymmetry scores of swiss roll for different numbers of neighbourhood}
+    \label{tab:etiketli_tablo}
+\end{table}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{asymgraph_swiss.png}
+    \caption{Graph of Asymmetry Score vs Number of Neighbours for Swiss Roll}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{asymgraph_mammoth.png}
+    \caption{Graph of Asymmetry Score vs Number of Neighbours for Mammoth}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{asymgraph_radial.png}
+    \caption{Graph of Asymmetry Score vs Number of Neighbours for Sphere with Radial Drifts}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{asymgraph_tangential.png}
+    \caption{Graph of Asymmetry Score vs Number of Neighbours for Sphere with Tangential Drifts}
+\end{figure}
+\FloatBarrier
+\section*{Randers vs.\ Euclidean Force Toggles}
+In \texttt{randers\_umap\_fit}, the attraction, repulsion, and gravity terms can each independently use either the Randers-perturbed metric or the plain Euclidean one, via three booleans: \texttt{randers\_attractive}, \texttt{randers\_repulsive}, \texttt{randers\_gravity}. When a term's flag is \texttt{True}, it uses $\rho_r = d + \langle B, y_j-y_i\rangle$ and $g_r = e + B$ (the drift $B$ perturbs both the effective distance and direction); when \texttt{False}, it falls back to the plain Euclidean $\rho_e = d$, $g_e = e$, ignoring $B$ entirely for that term. Gravity works the same way, but pulls node $i$ toward its own virtual target $y_i + b_i$ rather than toward another node. The figures below sweep gravity strength under different combinations of these three flags.
+\begin{figure}[htbp]
+    \centering
+    % width=0.45\textwidth kullanarak sayfa genişliğinin %45'ini kaplamalarını sağlıyoruz.
+    \includegraphics[width=0.45\textwidth]{swiss_grav0.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{swiss_grav5.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{swiss_grav10.png}
+    \caption{swiss roll embedding with gravity strength 0, 5, 10 with \texttt{grav\_randers=True, attr\_randers=False, rep\_randers=False}}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    % width=0.45\textwidth kullanarak sayfa genişliğinin %45'ini kaplamalarını sağlıyoruz.
+    \includegraphics[width=0.45\textwidth]{mammoth_grav0.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mammoth_grav5.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mammoth_grav10.png}
+    \caption{mammoth embedding with gravity strength 0, 5, 10 with \texttt{randers\_gravity=True, randers\_attractive=False, randers\_repulsive=False}}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.0\linewidth]{mammoth_grav5_snapshots.png}
+    \caption{Snapshots of mammoth embedding for strength 5 gravity}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.0\linewidth]{mammoth_grav10_snapshots.png}
+    \caption{Snapshots of mammoth embedding for strength 10 gravity}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    % width=0.45\textwidth kullanarak sayfa genişliğinin %45'ini kaplamalarını sağlıyoruz.
+    \includegraphics[width=0.45\textwidth]{mammoth_grav0_run3.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mammoth_grav5_run3.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mammoth_grav10_run3.png}
+    \caption{mammoth embedding with gravity strength 0, 5, 10 with \texttt{randers\_gravity=False, randers\_attractive=True, randers\_repulsive=False}}
+\end{figure}
+\FloatBarrier
+\section*{Drift Magnitude Normalization}
+The drift vector $B_i$ that feeds the Randers terms above is frozen once, at the "locate" step, before training. This section compares how its magnitude is treated afterwards: a fixed clipped constant (before) versus a live, embedding-relative rescaling (now, via \texttt{--normalize}).
+% ---------- BEFORE: clip_delta-based, frozen for the whole run ----------
+\textbf{Before: clip\_delta-based, frozen for the whole run}
+\[
+B_i^{(0)} = \hat{Y}_i^{\text{virt}} - \hat{Y}_i^{\text{real}}
+\]
+Locate step: a single deterministic placement, computed once, before any training.
+\[
+B_i \;=\; B_i^{(0)} \cdot \min\!\left(1,\ \frac{1-\delta}{\|B_i^{(0)}\|}\right),
+\qquad \delta = \texttt{clip\_delta}\ (\text{default } 0.01)
+\]
+\[
+\Longrightarrow\quad \|B_i\| \le 1-\delta \;\approx\; 1
+\]
+A fixed, embedding-scale-independent constant.
+\[
+B_i(t) = B_i \qquad \forall\, t = 1,\dots,T
+\]
+Both direction \emph{and} magnitude are constant for the whole training run.
+\bigskip
+\textbf{Now: \texttt{scale\_B\_fixed\_by\_knn\_distance} (\texttt{--normalize})}
+\[
+\hat{b}_i = \frac{B_i^{(0)}}{\|B_i^{(0)}\|}
+\]
+Direction is still frozen, exactly as before -- unaffected by everything below.
+\[
+d_i^{(k)}(t) = \max_{j \,\in\, \mathrm{kNN}_k(i,\, Y(t))} \big\|\, y_i(t) - y_j(t) \,\big\|
+\]
+Distance to node $i$'s $k$-th nearest neighbour in the \emph{live} embedding $Y(t)$.
+\[
+B_i(t) = \frac{\|B_i^{(0)}\|}{d_i^{(k)}(t)} \cdot \hat{b}_i
+\]
+Recomputed every epoch $t$. [OURS 2026-08-27, per explicit user request] The magnitude is the \emph{frozen located magnitude divided by} the live $k$-th-nearest-neighbour distance -- not $d_i^{(k)}(t)$ itself, as in an earlier version of this mechanism (see Key difference below for why this changed).
+\bigskip
+\textbf{Key difference.} Previously (before any live rescaling) $\|B_i(t)\| = \|B_i\| \le 1-\delta = O(1)$, constant and independent of $Y$. An earlier version of the live rescaling set the magnitude directly equal to $d_i^{(k)}(t)$, i.e.\ $\|B_i(t)\| = d_i^{(k)}(t) = O(\mathrm{extent}(Y(t)))$ -- this \emph{grows unboundedly} as the embedding spreads out during training, losing the $[0,1)$-scale property the rest of the pipeline otherwise maintains. The current rule instead \emph{divides} by $d_i^{(k)}(t)$, so $\|B_i(t)\|$ \emph{shrinks} as the embedding spreads out: since $\|B_i^{(0)}\| \le 1-\delta$ by construction, once $d_i^{(k)}(t) \ge 1$ (true for any embedding that has spread out past unit scale -- the normal regime after the first few epochs) this gives $\|B_i(t)\| \le \|B_i^{(0)}\| \le 1-\delta$, i.e.\ the same bound the un-normalised, frozen $B_i$ always satisfied. The direction $\hat{b}_i$ is identical across all versions -- only the magnitude rule differs. (Note: the comparison figures below were generated under the earlier, multiplicative version of \texttt{--normalize} and have not yet been re-run with the current divisive rule.)
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{swiss_embedding_notnormalized.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{swiss_embedding_normalized.png}
+    \caption{results of swiss roll embedding without normalization and with normalization}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{mammoth_embedding_notnormalized.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mammoth_embedding_normalized.png}
+    \caption{results of mammoth embedding without normalization and with normalization}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{sphere_radial_embedding_notnormalized.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{sphere_radial_embedding_normalized.png}
+    \caption{results of sphere with radial drifts embedding without normalization and with normalization}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{sphere_tangential_embedding_notnormalized.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{sphere_tangential_embedding_normalized.png}
+    \caption{results of sphere with tangential drifts embedding without normalization and with normalization}
+\end{figure}
+\FloatBarrier
+\subsection{MNIST: Raw vs.\ PCA-First Pipelines}
+\label{sec:mnist-raw-pca}
+\paragraph{Motivation.} MNIST offers a natural annotated ($n=70{,}000$, $784$-dimensional, $10$-class) test bed beyond the synthetic manifolds used elsewhere in this report. Two ways of applying our method were suggested: (1) run the pipeline directly on the raw $784$-dimensional pixel space, or (2) linearly project to a lower dimension first (van der Maaten's classic $t$-SNE-preprocessing recommendation, $\sim\!50$ dimensions) and run the pipeline on the projection. Both were implemented as a controlled pair, \texttt{embed\_MNIST\_raw.py} and \texttt{embed\_MNIST\_pca.py}, sharing every stage of the pipeline except the presence of the PCA step, so that any difference in the resulting embeddings can be attributed to the ambient dimensionality alone.
+\paragraph{Shared pipeline.} Let $X \in \mathbb{R}^{n \times 784}$ (raw) or $X_{\mathrm{pca}} \in \mathbb{R}^{n \times d}$, $d=50$ (PCA-reduced), denote the input to the following identical stages.
+\begin{enumerate}
+    \item \textbf{Local asymmetric neighbourhood distance.} IsUMap's own \texttt{distance\_graph\_generation} routine (unmodified, vendored library code) is run with $k=30$ neighbours and per-point normalisation. It returns a dictionary $R$ keyed by triples $(i,j,k)$, meaning ``distance from $j$ to $k$ as measured within $i$'s neighbourhood''; the genuine, directly measured distance from a point $i$ to one of its own neighbours is stored exactly when $j=i$, with the third index giving the true target.
+    \item \textbf{Matrix construction.} A sparse asymmetric matrix is built by keeping only the $i=j$ entries of $R$ and writing them as $D_{\mathrm{sparse}}[i,k]=R[(i,i,k)]$, with every unmeasured pair left as $+\infty$. (An earlier version of this step wrote every $(i,j,k)$ triple to position $[i,j]$ regardless of the $i=j$ condition; this landed real distances on the diagonal and unrelated triangulated values at the wrong indices, leaving $\sim\!95\%$ of the matrix at a spurious literal zero. Since nearest-neighbour search always prefers the smallest value, the resulting neighbour graph was pure noise — verified to have $0\%$ overlap with the true nearest neighbours on a controlled synthetic test, and to be the direct cause of an embedding with no visible digit clusters regardless of epoch count. The fix above restores $100\%$ overlap on the same test.)
+    \item \textbf{Directed completion.} $D_{\mathrm{sparse}}$, still sparse ($\sim\!k$ finite entries per row), is completed into a dense, connected, still-asymmetric matrix $D_{\mathrm{asym}} \in \mathbb{R}^{n\times n}$ via directed Dijkstra (\texttt{scipy.sparse.csgraph.shortest\_path}, \texttt{directed=True}) — the same completion strategy used by \texttt{randers\_bridge.compute\_dist\_matrix} elsewhere in this project.
+    \item \textbf{Embedding.} $D_{\mathrm{asym}}$ is passed directly to \texttt{randers\_umap\_fit} ($n_{\mathrm{neighbors}}=20$, $10$ negative samples, $500$ epochs, \texttt{use\_drift=True}, $B_{\mathrm{fixed}}=$ None). The drift field $B$ is therefore not fixed in advance but recovered live every epoch from $D_{\mathrm{asym}}$'s own asymmetry via \texttt{compute\_drift}, with \texttt{norm\_mode="relative"} guaranteeing $\|b_i\|<1$ by construction — no virtual points and no class-centroid targets are involved.
+\end{enumerate}
+\paragraph{Where the two variants differ.} \texttt{embed\_MNIST\_pca.py} inserts a single step before stage~1: $X \mapsto X_{\mathrm{pca}} = \mathrm{PCA}_{d}(X)$, $d=50$ by default, and stage~1 is then run on $X_{\mathrm{pca}}$ instead of $X$. \texttt{embed\_MNIST\_raw.py} omits this step entirely and runs stage~1 directly on the full $784$-dimensional $X$. No other stage, hyperparameter, or force toggle differs between the two scripts.
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{mnist_raw_embedding300.png}
+    \caption{MNIST Embedding on 28x28-dim with 300 Epochs }
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.2\linewidth]{mnist_raw_embedding300_snapshots.png}
+    \caption{Snapshots of MNIST Embedding on 28x28-dim with 300 Epochs}
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{mnist_pca_embedding300.png}
+    \caption{MNIST Embedding on 50-dim with 300 Epochs }
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.2\linewidth]{mnist_pca_embedding300_snapshots.png}
+    \caption{Snapshots of MNIST Embedding on 50-dim with 300 Epochs}
+\end{figure}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{mnist_raw_embedding300_grav5.png}
+    \caption{MNIST Embedding on 28x28-dim with 300 Epochs with gravity of strength 5 }
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.2\linewidth]{mnist_raw_embedding300_grav5_snapshots.png}
+    \caption{Snapshots of MNIST Embedding on 28x28-dim with 300 Epochs with gravity of strength 5 }
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{mnist_pca_embedding300_grav5.png}
+    \caption{MNIST Embedding on 50-dim with 300 Epochs with gravity of strength 5}
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.2\linewidth]{mnist_pca_embedding300_grav5_snapshots.png}
+    \caption{Snapshots of MNIST Embedding on 50-dim with 300 Epochs with gravity of strength 5}
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.45\textwidth]{mnist_finsler_smacof_isumap.png}
+    \hfill
+    \includegraphics[width=0.45\textwidth]{mnist_pca_finsler_smacof_isumap.png}
+    \hfill
+
+    \caption{FinslerMDS results for MNIST Embedding without and with PCA}
+\end{figure}
+\FloatBarrier
+\subsection{Wisconsin Breast Cancer Dataset}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.6\linewidth]{breastcancer_embedding.png}
+    \caption{Breast Cancer Dataset Embedding with 100 Epochs }
+\end{figure}
+\FloatBarrier
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.2\linewidth]{breastcancer_embedding_snapshots.png}
+    \caption{Breast Cancer Dataset Embedding Snapshots with 300 Epochs }
+\end{figure}
+\FloatBarrier
+\end{document}

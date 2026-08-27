@@ -732,7 +732,13 @@ def randers_umap_fit(
             np.fill_diagonal(d_self_excl0, np.inf)
             nearest_k0 = np.partition(d_self_excl0, k_local0 - 1, axis=1)[:, :k_local0]
             kth_dist0 = nearest_k0.max(axis=1)
-            B_snap0 = s0 * kth_dist0[:, np.newaxis] * B_fixed_direction
+            # [OURS 2026-08-27, per explicit user request -- "driftin boyunu
+            # o k. neighbour'in boyuna bolucez"] magnitude = ||B_fixed|| /
+            # kth_dist (DIVIDE by the live k-th-nn distance), not kth_dist
+            # itself. See the training-loop comment below for the full
+            # rationale; mirrored here only so the epoch-0 snapshot shows the
+            # same value the loop's own first iteration would compute.
+            B_snap0 = s0 * (bn_fixed / np.maximum(kth_dist0[:, np.newaxis], eps)) * B_fixed_direction
         else:
             B_snap0 = B.copy()
         snapshots.append({"epoch": 0, "Y": Y_init.copy(), "B": B_snap0})
@@ -782,17 +788,40 @@ def randers_umap_fit(
 
         if B_fixed is not None:
             if scale_B_fixed_by_knn_distance:
-                # [OURS 2026-08-25, per explicit user request] magnitude =
-                # live distance to i's k-th nearest neighbour in Y (the
-                # FARTHEST of the k nearest, i.e. max of the k smallest
-                # distances -- NOT gravity_neighbor_weight's rho_local,
-                # which takes the MIN/1st-nearest instead).
+                # [OURS 2026-08-25] live distance to i's k-th nearest
+                # neighbour in Y (the FARTHEST of the k nearest, i.e. max of
+                # the k smallest distances -- NOT gravity_neighbor_weight's
+                # rho_local, which takes the MIN/1st-nearest instead).
                 k_local = min(n_neighbors, n - 1)
                 d_self_excl = d_mat.copy()
                 np.fill_diagonal(d_self_excl, np.inf)
                 nearest_k = np.partition(d_self_excl, k_local - 1, axis=1)[:, :k_local]
                 kth_dist = nearest_k.max(axis=1)
-                B = s * kth_dist[:, np.newaxis] * B_fixed_direction
+                # [OURS 2026-08-27, per explicit user request -- "su an k.
+                # en yakin neighbour'in boyuna esitliyorsun ya driftin
+                # boyunu o k. neighbour'in boyuna bolucez boyle daha
+                # mantikli oluyor sanki"] magnitude = ||B_fixed|| / kth_dist
+                # (DIVIDE the frozen located magnitude by the live k-th-nn
+                # distance), replacing the previous "magnitude = kth_dist"
+                # rule entirely (not kept as a separate flag, per explicit
+                # user request). Direction (B_fixed_direction) is untouched,
+                # exactly as located, same as before.
+                #
+                # Why this is better bounded than the old rule: ||B_fixed||
+                # (bn_fixed) is <= 1-clip_delta by construction (the locate
+                # step's own clip). The OLD rule set magnitude = kth_dist
+                # directly, which GROWS unboundedly as the embedding spreads
+                # out during training (kth_dist increases with the
+                # embedding's own extent) -- exactly the "0-1 arasinda
+                # kalmiyor" problem raised earlier. This new rule instead
+                # SHRINKS as kth_dist grows: once kth_dist >= 1 (true for
+                # any embedding that has spread out even slightly past unit
+                # scale -- the normal regime after the first few epochs),
+                # magnitude = bn_fixed/kth_dist <= bn_fixed <= 1-clip_delta,
+                # i.e. bounded by the SAME constant the un-normalized
+                # B_fixed always was. Only in the transient (very start of
+                # training, kth_dist < 1) can magnitude exceed that bound.
+                B = s * (bn_fixed / np.maximum(kth_dist[:, np.newaxis], eps)) * B_fixed_direction
             else:
                 B = s * np.asarray(B_fixed, dtype=np.float64)
         elif use_drift:
