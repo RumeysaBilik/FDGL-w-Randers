@@ -48,7 +48,7 @@ sys.path.insert(0, str(HERE))
 
 from randers_bridge import compute_dist_matrix
 from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, classical_mds
-from run_swiss_roll import run_located_drift
+from randers_bridge import run_located_drift
 
 
 def make_swiss_roll_randers_generated(n, seed=42, noise=0.0):

@@ -47,7 +47,8 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from run_swiss_roll import make_swiss_roll_randers, run_located_drift
+from run_swiss_roll import make_swiss_roll_randers
+from randers_bridge import run_located_drift
 from randers_umap import procrustes_align
 
 

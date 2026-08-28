@@ -46,7 +46,7 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from randers_bridge import compute_dist_matrix, asymmetry_score
+from randers_bridge import compute_dist_matrix, asymmetry_score, run_located_drift
 from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, classical_mds
 
 
@@ -89,187 +89,16 @@ def make_swiss_roll_randers(n, seed=42):
     return X, omega, t
 
 
-def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
-                      epochs=500, clip_delta=0.01, use_gravity=False,
-                      gravity_strength=1.0, gravity_neighbor_weight=True,
-                      use_virtual_neighbor=False, proj_dim=2, adjacency="threshold",
-                      snapshot_every=None, ramp=False, seed=0, verbose=True,
-                      apply_step=True, init_method="isomap",
-                      normalize_drift_by_asymmetry=False):
-    """
-    The full two-step pipeline, factored out so both main() (CLI/plotting)
-    and test.py (diagnostics) call the exact same code -- no duplication.
-
-    adjacency : [OURS 2026-08-20, per explicit user request -- "bu mantığı
-        direkt k-nearest'a çevirip denemek istiyorum"] "threshold" (default,
-        unchanged) or "knn", forwarded to BOTH compute_dist_matrix calls
-        below (locate step's D_sym_aug AND apply step's D_asym). See
-        randers_bridge.compute_dist_matrix's own adjacency docstring for
-        the full explanation of the difference.
-
-    proj_dim : [OURS 2026-08-20, per explicit user request] int, default 2.
-        Embedding dimension for BOTH the locate step's placement
-        (classical_mds/spectral_layout) and the apply step's
-        randers_umap_fit call. randers_umap_fit's own `d` parameter
-        already supports arbitrary dimension -- this was previously
-        hardcoded to 2 at every call site in this file. Pass 3 for a full
-        3D force-directed layout, mirroring FinslerMDS's --proj-dim
-        convention (main_sphere_tangential.py etc.).
-
-    STEP 1 locate : place n real + n virtual (x_i+omega_i) points with ONE
-                    deterministic placement call (no training), read off
-                    B := Y_virtual - Y_real from that placement.
-    STEP 2 apply  : embed the n real points on the true D_asym, with that
-                    B frozen + attached (B_fixed), optionally +gravity --
-                    only a_i (each real point's own position) trains each
-                    epoch, b_i is never touched.
-
-    init_method : [OURS 2026-08-16, per explicit user request] "umap"
-        (default, unchanged) uses fuzzy_simplicial_set+spectral_layout --
-        UMAP's own Laplacian-eigenmap init. "isomap" uses classical_mds
-        instead -- Isomap's own finishing step (D_sym_aug here is already
-        Isomap-style k-NN+Dijkstra via compute_dist_matrix, fully dense, so
-        this makes the WHOLE pipeline consistently Isomap, not just the
-        distance construction). Only affects STEP 1's placement method;
-        everything else (B extraction, apply-step training) is identical.
-
-    snapshot_every : [OURS 2026-08-11] int or None. If given, forwarded to
-        the APPLY step's randers_umap_fit call only (the locate step's
-        result isn't what we usually want to watch evolve) -- captures Y
-        every snapshot_every epochs, from the initial Y_real0 through to
-        the final embedding, for a "training trajectory" plot.
-
-    normalize_drift_by_asymmetry : [OURS 2026-08-25, per explicit user
-        request -- "default eskisi gibi normalize edilmeden olsun, --normalize
-        flagi verirsek normalize etsin", later changed to "direkt kth nearest
-        neighbouruna gore yapicaz"] bool, default False (off -- exact prior
-        behaviour, B_located used as-is, frozen direction AND magnitude for
-        the whole run). If True: B_located's DIRECTION stays exactly as
-        located, but its MAGNITUDE is replaced every epoch with that node's
-        LIVE distance to its own k-th nearest neighbour in the current
-        embedding Y -- forwarded to randers_umap_fit as
-        scale_B_fixed_by_knn_distance (see its docstring there for the
-        exact mechanism; this needs the live, epoch-by-epoch Y, so it can't
-        be precomputed here before training starts, unlike the earlier
-        asymmetry_score-based version this replaced). asym_per_node/
-        asym_global (below) remain always-computed diagnostics either way,
-        just no longer used to set B's length when this flag is off... or
-        on, now -- they're purely informational now regardless.
-
-    apply_step : [OURS 2026-08-13] bool, default True. If False, skip STEP 2
-        entirely -- no D_asym build, no force-directed training -- and
-        return with "Y"/"B" set to the raw locate-step output (Y_real0 /
-        B_located). Lets callers get just the initial (located) embedding
-        with its drift vectors, e.g. for a quick "--init-only" mode.
-
-    Returns
-    -------
-    dict: Y, B, D_asym, Y_real0, Y_virtual0, B_located (pre-apply, for
-          diagnostics that want to inspect the locate step in isolation),
-          snapshots (list of {"epoch", "Y", "B"}, only if snapshot_every given)
-    """
-    n = X.shape[0]
-
-    # ---- locate: embed n real + n virtual (x_i+omega_i) points together ----
-    X_virtual = X + omega
-    X_aug = np.vstack([X, X_virtual])
-
-    if verbose:
-        print(f"\nLocate: building symmetric geodesic D on {2*n} augmented points...")
-    D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k, path_method="auto",
-                                       randers_field=None, adjacency=adjacency)
-
-    # [OURS 2026-08-16] init-only: ONE deterministic placement call on the
-    # augmented graph, no force-directed training. locate_epochs is
-    # intentionally unused now -- kept as a parameter only so existing
-    # callers/CLI flags don't break.
-    if init_method == "isomap":
-        if verbose:
-            print(f"Locate: classical_mds on the augmented graph (no training)...")
-        Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
-    elif init_method == "umap":
-        if verbose:
-            print(f"Locate: spectral_layout on the augmented graph (no training)...")
-        mu_aug, _ = fuzzy_simplicial_set(D_sym_aug, emb_k)
-        Y_aug0 = spectral_layout(mu_aug, d=proj_dim, seed=seed)
-    else:
-        raise ValueError(f"init_method must be 'umap' or 'isomap', got {init_method!r}")
-    Y_real0, Y_virtual0 = Y_aug0[:n], Y_aug0[n:]
-
-    B_located = Y_virtual0 - Y_real0
-    limit = 1.0 - clip_delta
-    bn0 = np.linalg.norm(B_located, axis=1, keepdims=True)
-    B_located = B_located * np.minimum(1.0, limit / np.maximum(bn0, 1e-12))
-
-    if verbose:
-        bn = np.linalg.norm(B_located, axis=1)
-        print(f"B located: mean||b||={bn.mean():.4f}  max||b||={bn.max():.4f}  "
-              f"clipped={(bn >= limit - 1e-9).sum()}/{n}")
-
-    if not apply_step:
-        # [OURS 2026-08-13] init-only: stop here, hand back the raw located
-        # embedding/drift as "Y"/"B" so callers (main()'s plotting code) can
-        # treat this exactly like a normal result -- no D_asym built, no
-        # training run.
-        if verbose:
-            print("\napply_step=False -- skipping STEP 2, returning located init only.")
-        return {"Y": Y_real0, "B": B_located, "D_asym": None,
-                "Y_real0": Y_real0, "Y_virtual0": Y_virtual0, "B_located": B_located}
-
-    # ---- apply: real D_asym, B frozen + attached ----------------------------
-    if verbose:
-        print(f"\nApply: building asymmetric D_asym on the {n} real points...")
-    D_asym, _, bln_asym = compute_dist_matrix(X, n_neighbors=k, path_method="auto",
-                                    randers_field=omega, adjacency=adjacency,
-                                    return_adjacency=True)
-
-    # [OURS 2026-08-24, per explicit user request] control metric -- how much
-    # of D_asym's magnitude, on average over each node's real graph
-    # neighbours, is asymmetric (direction-dependent) vs symmetric. See
-    # randers_bridge.asymmetry_score's own docstring for the exact formula.
-    # Always computed (cheap, O(n*k)) and stashed in the result dict; printed
-    # automatically when verbose, same as the other summary stats below.
-    asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
-    if verbose:
-        print(f"asymmetry_score: global={asym_global:.4f}  "
-              f"(mean |d_ij-d_ji| / mean-dist, averaged over each node's real "
-              f"neighbours, then over all nodes -- 0 = fully symmetric)")
-
-    # [OURS 2026-08-25, per explicit user request -- "normalizasyonu
-    # degistirip direkt kth nearest neighbouruna gore yapicaz"] default
-    # False = exact prior behaviour, B_located used as-is (frozen
-    # direction AND magnitude for the whole run). True: B_located's
-    # DIRECTION stays exactly as located, but its MAGNITUDE is replaced,
-    # EVERY EPOCH, with that node's live distance to its own k-th nearest
-    # neighbour in the CURRENT embedding Y -- handled entirely inside
-    # randers_umap_fit's own loop via scale_B_fixed_by_knn_distance (see
-    # its docstring there for the exact mechanism), since this needs the
-    # LIVE, epoch-by-epoch Y, not a one-time value computable here before
-    # training even starts. This REPLACES the previous asymmetry_score-
-    # based magnitude target (kept only as the always-computed diagnostic
-    # asym_per_node/asym_global below, no longer used to set B's length).
-    out2 = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
-                            n_epochs=epochs, use_drift=True, d=proj_dim,
-                            B_fixed=B_located, Y_init_override=Y_real0,
-                            use_gravity=use_gravity, gravity_strength=gravity_strength,
-                            gravity_neighbor_weight=gravity_neighbor_weight,
-                            use_virtual_neighbor=use_virtual_neighbor, ramp=ramp,
-                            snapshot_every=snapshot_every,
-                            scale_B_fixed_by_knn_distance=normalize_drift_by_asymmetry,
-                            clip_delta=clip_delta, seed=seed, verbose=verbose)
-    Y, B = out2["Y"], out2["B"]
-
-    if verbose:
-        bn = np.linalg.norm(B, axis=1)
-        print(f"\nextent={Y.max()-Y.min():.2f}  mean||b||={bn.mean():.4f}  "
-              f"max||b||={bn.max():.4f}  clipped={(bn >= limit - 1e-9).sum()}/{n}")
-
-    result = {"Y": Y, "B": B, "D_asym": D_asym,
-              "Y_real0": Y_real0, "Y_virtual0": Y_virtual0, "B_located": B_located,
-              "asymmetry_score": asym_global, "asymmetry_per_node": asym_per_node}
-    if snapshot_every is not None:
-        result["snapshots"] = out2["snapshots"]
-    return result
+# [OURS 2026-08-28, per explicit user request -- "run_located_drift
+# fonksiyonunu randers_bridge'e tasimak istiyorum, butun diger runladigimiz
+# dosyalar oradan ceksin"] run_located_drift() used to be defined here --
+# it now lives in randers_bridge.py (imported above), which is the natural
+# home since the function's job (X, omega -> D_asym -> embedding) is
+# exactly what that module is for. Every other run_*.py/test.py/
+# drift_magnitude_test.py/stability_check.py already imported it FROM this
+# file; they now import it from randers_bridge.py instead (this file's own
+# CLI/plotting code below, main(), is unaffected -- it just calls
+# run_located_drift(...) exactly as before, only the import line changed).
 
 
 def main():

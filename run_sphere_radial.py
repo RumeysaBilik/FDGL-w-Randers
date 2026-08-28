@@ -57,7 +57,7 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from run_swiss_roll import run_located_drift
+from randers_bridge import run_located_drift
 from run_sphere_tangential import make_sphere_points
 
 
