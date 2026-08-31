@@ -178,6 +178,19 @@ def main():
                          "current embedding, keeping its DIRECTION as located. See "
                          "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-08-28, per explicit user request] which attraction/"
+                         "repulsion LAW drives the force-directed layout. 'fr_gravity' "
+                         "(NEW DEFAULT) = Bannister et al.'s own Fruchterman-Reingold-"
+                         "style forces (arXiv:1209.0748 Section 2, cross-checked against "
+                         "the hypergz package's our_layout.py), evaluated at our (possibly "
+                         "Randers-substituted) rho/g. 'umap' = the original UMAP "
+                         "(a,b)-curve law (exact prior behaviour). Everything else "
+                         "(drift, gravity, virtual-neighbor, ramp, ...) is unaffected by "
+                         "this choice -- see randers_umap_fit's force_model docstring.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="natural edge length for --force-model fr_gravity. None "
+                         "(default) uses the paper's own sqrt(1/n).")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="swiss_embedding")
     p.add_argument("--quiet",  action="store_true")
@@ -217,7 +230,8 @@ def main():
                                snapshot_every=args.snapshot_every, ramp=args.ramp,
                                seed=args.seed, verbose=not args.quiet,
                                apply_step=not args.init_only, init_method=args.init_method,
-                               normalize_drift_by_asymmetry=args.normalize)
+                               normalize_drift_by_asymmetry=args.normalize,
+                               force_model=args.force_model, fr_k=args.fr_k)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------

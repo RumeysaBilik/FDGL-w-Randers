@@ -81,6 +81,13 @@ def main():
                          "init AND the apply-step training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-08-28, per explicit user request] see run_swiss_roll.py's "
+                         "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
+                         "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
+                         "(a,b)-curve law.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mammoth_embedding_isumap")
     p.add_argument("--quiet", action="store_true")
@@ -120,7 +127,8 @@ def main():
                             gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
                             use_virtual_neighbor=not args.no_virtual_neighbor,
                             ramp=args.ramp, seed=args.seed,
-                            snapshot_every=apply_snapshot_every, verbose=not args.quiet)
+                            snapshot_every=apply_snapshot_every, verbose=not args.quiet,
+                            force_model=args.force_model, fr_k=args.fr_k)
 
     if args.init_only:
         Y, B = out["snapshots"][0]["Y"], out["snapshots"][0]["B"]

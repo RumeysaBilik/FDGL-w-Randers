@@ -366,6 +366,8 @@ def randers_umap_fit(
     snapshot_every: int = None,
     seed: int = 0,
     verbose: bool = True,
+    force_model: str = "fr_gravity",
+    fr_k: float = None,
 ) -> dict:
     """
     Part A: drift folded into the UMAP metric itself.
@@ -376,6 +378,65 @@ def randers_umap_fit(
     UMAP's own attractive/repulsive forces (Section 3.2) are evaluated at
     rho, g instead of d, e. b_i=0 for every i recovers exactly vanilla
     UMAP (use_drift=False), since then rho=d, g=e.
+
+    force_model : [OURS 2026-08-28, per explicit user request -- "force
+        directed graph layoutını tamamen buna geçirelim ve default bu
+        olsun"] "fr_gravity" (NEW DEFAULT) or "umap" (the original
+        mechanism, exact prior behaviour, use force_model="umap" to get it
+        back).
+
+        This ONLY replaces the main attraction/repulsion LAW (what used to
+        be attr_coeff/rep_coeff below) -- everything else in this function
+        is untouched and applies identically to either choice: rho/g's
+        Randers substitution (randers_attractive/randers_repulsive still
+        pick which metric the chosen law is evaluated at), B/drift
+        (use_drift, B_fixed, norm_mode, drift_mode, ...), gravity
+        (use_gravity and everything under it), use_virtual_neighbor, ramp,
+        grad_clip, the decaying-lr step update, and snapshotting. Ported
+        from Bannister, Eppstein, Goodrich, Trott, "Force-Directed Graph
+        Drawing Using Social Gravity and Scaling" (GD 2012, arXiv:
+        1209.0748) Section 2's own baseline forces (the ones their social
+        gravity is ADDED to), cross-checked against the reference
+        implementation in the `hypergz` PyPI package (Amit Sheer Cohen &
+        Neta Roth)'s `our_layout.py`:
+
+            f_r(i,j) = k^2/rho(i,j)^2 * (-g(i,j))     [repulsion, ALL pairs]
+            f_a(i,j) = rho(i,j)/k     * ( g(i,j))     [attraction, EDGES only]
+
+        where k (fr_k below) is the paper's own "natural edge length"
+        constant (their k, unrelated to n_neighbors' k) and rho/g are
+        exactly the (possibly Randers-substituted) rho_attr/g_attr,
+        rho_rep/g_rep pairs computed above -- i.e. this is the paper's
+        force LAW with our metric plugged in, not a separate reimplementation
+        of their whole pipeline (their own temperature-cooling/threshold-
+        based step schedule and gravity-ramp-up schedule are NOT ported;
+        this project already has its own decaying-lr + optional `ramp`
+        mechanism for that, reused unchanged for both force_model values).
+        "umap" instead uses UMAP's own fitted (a,b)-curve law (Section 3.2,
+        unchanged from before this flag existed):
+
+            attr_coeff(rho) = 2*a*b*rho^(2b-1) / (1+a*rho^(2b))   [x mu]
+            rep_coeff(rho)  = 2*b*rho / (rho^2*(1+a*rho^(2b)))    [x (1-mu), rescaled]
+
+        Edges for "fr_gravity"'s attraction term are the UNDIRECTED union
+        of the UMAP k-NN graph (knn_mask | knn_mask.T -- the natural binary
+        analogue of "umap"'s own fuzzy union mu = A+A.T-A*A.T), not mu
+        itself: the paper's f_a is a binary 0/1 law (an edge either exists
+        or it doesn't), so there is no continuous membership weight to
+        reuse here the way "umap" uses mu/(1-mu). Repulsion, like the
+        paper's own f_r, applies to every pair unconditionally -- no
+        rep_scale negative-sampling correction (that correction exists
+        specifically to approximate UMAP's own stochastic negative
+        sampling; the paper's algorithm was never stochastic to begin
+        with, so nothing needs correcting here).
+
+    fr_k : [OURS 2026-08-28] float or None. Only used when
+        force_model="fr_gravity". None (default) uses the paper's own
+        default, k = sqrt(1/n) (their Section 2.1) -- a's natural length
+        chosen so a single K2 edge has length k in a unit-area layout.
+        Override to tune the attraction/repulsion balance for this
+        project's own embedding scale (spectral_layout's output is not
+        guaranteed to sit in the paper's assumed unit-area regime).
 
     B_fixed : [OURS 2026-08-05] (n,d) array, or None. If given, b_i is NOT
         recomputed every epoch (the whole "live drift" mechanism -- see
@@ -675,6 +736,17 @@ def randers_umap_fit(
     else:
         raise ValueError("drift_mode must be 'knn' or 'all_j'")
 
+    # [OURS 2026-08-28] force_model="fr_gravity" setup -- computed once,
+    # outside the epoch loop, since neither the edge set nor k (fr_k) ever
+    # changes during training (only rho/g, which already get recomputed
+    # every epoch below regardless of force_model).
+    if force_model not in ("umap", "fr_gravity"):
+        raise ValueError("force_model must be 'umap' or 'fr_gravity'")
+    if force_model == "fr_gravity":
+        A_edges = (knn_mask | knn_mask.T).astype(np.float64)
+        np.fill_diagonal(A_edges, 0.0)
+        k_nat = float(fr_k) if fr_k is not None else 1.0 / np.sqrt(n)
+
     if Y_init_override is not None:
         Y = np.asarray(Y_init_override, dtype=np.float64).copy()
     else:
@@ -761,8 +833,12 @@ def randers_umap_fit(
         rf_str = "" if (randers_attractive and randers_repulsive) else \
             f"  [main force: attr={'randers' if randers_attractive else 'euclid'}, " \
             f"rep={'randers' if randers_repulsive else 'euclid'}]"
-        print(f"\n-- Randers-UMAP (Part A)  n={n} d={d} k={n_neighbors}  {mode_str}{grav_str}{vn_str}{rf_str} --")
-        print(f"   a={a:.4f} b={b_param:.4f}  (min_dist={min_dist}, spread={spread})")
+        print(f"\n-- Randers-UMAP (Part A)  n={n} d={d} k={n_neighbors}  "
+              f"force_model={force_model}  {mode_str}{grav_str}{vn_str}{rf_str} --")
+        if force_model == "umap":
+            print(f"   a={a:.4f} b={b_param:.4f}  (min_dist={min_dist}, spread={spread})")
+        else:
+            print(f"   fr_k={k_nat:.4f}  (n_edges={int(A_edges.sum())//2})")
 
     for epoch in range(n_epochs):
         # [OURS 2026-08-10] ramp -- ported from isomap_randers_umap.py:
@@ -841,16 +917,29 @@ def randers_umap_fit(
         rho_attr, g_attr = (rho_r, g_r) if randers_attractive else (rho_e, g_e)
         rho_rep, g_rep = (rho_r, g_r) if randers_repulsive else (rho_e, g_e)
 
-        rho2b_attr = rho_attr ** (2 * b_param)
-        attr_coeff = (2 * a * b_param * rho_attr ** (2 * b_param - 1)) / (1.0 + a * rho2b_attr)
-
-        rho2b_rep = rho_rep ** (2 * b_param)
-        rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
-
         rho = rho_r  # [OURS] kept for the epoch-diagnostic residual print below
 
-        force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
-                - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
+        if force_model == "umap":
+            rho2b_attr = rho_attr ** (2 * b_param)
+            attr_coeff = (2 * a * b_param * rho_attr ** (2 * b_param - 1)) / (1.0 + a * rho2b_attr)
+
+            rho2b_rep = rho_rep ** (2 * b_param)
+            rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
+
+            force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
+                    - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
+        else:  # force_model == "fr_gravity"
+            # [OURS 2026-08-28] Bannister et al. Section 2 / hypergz
+            # our_layout.py's own baseline forces -- see force_model's
+            # docstring above for the exact correspondence. attraction is
+            # binary-edge-gated (A_edges), repulsion applies to every pair
+            # unconditionally, both evaluated at the (possibly Randers-
+            # substituted) rho/g pairs above, same as "umap".
+            attr_coeff_fr = rho_attr / k_nat
+            rep_coeff_fr = (k_nat * k_nat) / (eps + rho_rep ** 2)
+
+            force = (A_edges * attr_coeff_fr)[:, :, np.newaxis] * g_attr \
+                    - rep_coeff_fr[:, :, np.newaxis] * g_rep
         np.fill_diagonal(force[:, :, 0], 0.0)
         if d > 1:
             for dd in range(1, d):
