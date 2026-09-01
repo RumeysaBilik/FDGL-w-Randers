@@ -132,6 +132,17 @@ def main():
                          "current embedding, keeping its DIRECTION as located. See "
                          "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-08-31] see run_swiss_roll.py's --force-model help -- "
+                         "'fr_gravity' (NEW DEFAULT) = Bannister et al.'s own "
+                         "Fruchterman-Reingold-style forces, 'umap' = original UMAP "
+                         "(a,b)-curve law.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-08-31] only affects --force-model umap -- see "
+                         "run_swiss_roll.py's --neg-sampling help / randers_umap_fit's "
+                         "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="sphere_radial_embedding")
     p.add_argument("--quiet",  action="store_true")
@@ -195,7 +206,9 @@ def main():
                                snapshot_every=args.snapshot_every, ramp=args.ramp,
                                seed=args.seed, verbose=not args.quiet,
                                apply_step=not args.init_only, init_method=args.init_method,
-                               normalize_drift_by_asymmetry=args.normalize)
+                               normalize_drift_by_asymmetry=args.normalize,
+                               force_model=args.force_model, fr_k=args.fr_k,
+                               negative_sampling=args.neg_sampling)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
@@ -232,7 +245,8 @@ def main():
     if args.init_only:
         ax.set_title(f"Randers-UMAP sphere (radial), LOCATED INIT ONLY ({args.init_method}, no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP sphere (radial), located-drift init ({args.init_method})  (n={n})", fontsize=11)
+        ax.set_title(f"Randers-UMAP sphere (radial), located-drift init ({args.init_method})  "
+                     f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 

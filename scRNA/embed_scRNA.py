@@ -267,7 +267,7 @@ def main():
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"Randers-UMAP on scRNA (CRCC_AKPE, 50D Seurat PCA, n={n})", fontsize=10)
+    ax.set_title(f"Randers-UMAP on scRNA (CRCC_AKPE, 50D Seurat PCA, n={n}, epochs={args.epochs})", fontsize=10)
     fig.tight_layout()
     out_path = os.path.join(save_dir, f"{args.out}.png")
     fig.savefig(out_path, dpi=150)

@@ -368,6 +368,7 @@ def randers_umap_fit(
     verbose: bool = True,
     force_model: str = "fr_gravity",
     fr_k: float = None,
+    negative_sampling: bool = False,
 ) -> dict:
     """
     Part A: drift folded into the UMAP metric itself.
@@ -437,6 +438,46 @@ def randers_umap_fit(
         Override to tune the attraction/repulsion balance for this
         project's own embedding scale (spectral_layout's output is not
         guaranteed to sit in the paper's assumed unit-area regime).
+
+    negative_sampling : [OURS 2026-08-31, per explicit user request --
+        "negative sampling fikrini uygulayabilir miyiz" / later extended,
+        "FR'a da uygulayalım"] bool, default False (no-op, exact prior
+        behaviour). Affects BOTH force_model values, but the two behave
+        differently since their DENSE (default) repulsion already means
+        something different in each:
+
+        force_model="umap": dense/default repulsion is the sum over every
+        non-neighbour, rescaled by rep_scale=n_negative_samples/
+        n_non_neighbors so its expected magnitude matches real UMAP's
+        stochastic negative sampling EXACTLY (zero-variance estimator of
+        the same expectation). True: repulsion is computed the way real
+        UMAP/word2vec actually do it instead -- for each node i,
+        `n_negative_samples` OTHER points are drawn fresh from `rng` EVERY
+        epoch (self-sampling deflected to (i+1)%n, not otherwise excluded
+        -- real UMAP doesn't exclude true neighbours from negative samples
+        either), repulsion summed over only those, UNSCALED (this already
+        IS an unbiased sample of the same target, no further correction
+        needed). Same expected gradient as the dense default, just noisier.
+
+        force_model="fr_gravity": Bannister et al.'s own algorithm has NO
+        sampling at all -- dense/default repulsion is the EXACT sum over
+        every one of the n-1 other points, unconditionally (no mu/(1-mu)
+        neighbour discount the way "umap" has). True: same per-node random
+        draw as above, but the sampled sum is RESCALED by
+        (n-1)/n_negative_samples -- without this, sampling only S of the
+        n-1 terms and leaving it unscaled would understate total
+        repulsion by roughly that same factor, breaking the rho=k
+        equilibrium-spacing balance the dense law is built around (see
+        force_model's own docstring). With the rescale, this is the
+        standard Monte-Carlo-corrected estimator of the same dense
+        target, i.e. a genuine (if unfaithful-to-the-paper) speed/variance
+        trade for force_model="fr_gravity", where the dense path has never
+        had any sampling to begin with.
+
+        Computed as a separate additive term after the dense attraction-
+        only force (mirrors how gravity/use_virtual_neighbor are already
+        layered on top of `step`), so attraction, drift B, gravity,
+        virtual-neighbor etc. are all completely unaffected by this flag.
 
     B_fixed : [OURS 2026-08-05] (n,d) array, or None. If given, b_i is NOT
         recomputed every epoch (the whole "live drift" mechanism -- see
@@ -923,11 +964,16 @@ def randers_umap_fit(
             rho2b_attr = rho_attr ** (2 * b_param)
             attr_coeff = (2 * a * b_param * rho_attr ** (2 * b_param - 1)) / (1.0 + a * rho2b_attr)
 
-            rho2b_rep = rho_rep ** (2 * b_param)
-            rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
+            if negative_sampling:
+                # [OURS 2026-08-31] repulsion handled by the sampled block
+                # after step=force.sum(axis=1) below -- attraction only here.
+                force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr
+            else:
+                rho2b_rep = rho_rep ** (2 * b_param)
+                rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
 
-            force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
-                    - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
+                force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
+                        - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
         else:  # force_model == "fr_gravity"
             # [OURS 2026-08-28] Bannister et al. Section 2 / hypergz
             # our_layout.py's own baseline forces -- see force_model's
@@ -936,16 +982,78 @@ def randers_umap_fit(
             # unconditionally, both evaluated at the (possibly Randers-
             # substituted) rho/g pairs above, same as "umap".
             attr_coeff_fr = rho_attr / k_nat
-            rep_coeff_fr = (k_nat * k_nat) / (eps + rho_rep ** 2)
 
-            force = (A_edges * attr_coeff_fr)[:, :, np.newaxis] * g_attr \
-                    - rep_coeff_fr[:, :, np.newaxis] * g_rep
+            if negative_sampling:
+                # [OURS 2026-08-31] repulsion handled by the sampled block
+                # after step=force.sum(axis=1) below -- attraction only here.
+                force = (A_edges * attr_coeff_fr)[:, :, np.newaxis] * g_attr
+            else:
+                rep_coeff_fr = (k_nat * k_nat) / (eps + rho_rep ** 2)
+                force = (A_edges * attr_coeff_fr)[:, :, np.newaxis] * g_attr \
+                        - rep_coeff_fr[:, :, np.newaxis] * g_rep
         np.fill_diagonal(force[:, :, 0], 0.0)
         if d > 1:
             for dd in range(1, d):
                 np.fill_diagonal(force[:, :, dd], 0.0)
 
         step = force.sum(axis=1)                              # (n,d) net force on y_i
+
+        # [OURS 2026-08-31, per explicit user request -- "negative sampling
+        # fikrini uygulayabilir miyiz" / "FR'a da uygulayalım"] TRUE
+        # stochastic negative sampling, active for BOTH force_model values
+        # when negative_sampling=True -- draws n_negative_samples random
+        # points PER NODE, fresh every epoch, and sums repulsion over only
+        # those. Additive, mirrors how gravity/use_virtual_neighbor are
+        # layered onto `step` below. The sampling geometry (neg_idx, rho_neg,
+        # g_neg) is shared; only the coefficient formula and rescaling
+        # differ by force_model, matching each model's own dense law:
+        #   "umap"       -- coefficient = UMAP's own rep_coeff(rho), UNSCALED
+        #                    (this IS the real stochastic estimator; the
+        #                    dense/default path already computes its exact
+        #                    expectation via rep_scale, so no further
+        #                    rescaling belongs here).
+        #   "fr_gravity" -- coefficient = k^2/rho^2 (Bannister et al.'s own
+        #                    f_r), RESCALED by (n-1)/n_negative_samples.
+        #                    Unlike "umap" (whose dense sum already excludes
+        #                    real neighbours via (1-mu) and is itself an
+        #                    exact expectation), fr_gravity's dense sum is
+        #                    over ALL n-1 other points, unconditionally, with
+        #                    NO existing expectation-matching scale anywhere
+        #                    -- sampling only n_negative_samples of those and
+        #                    leaving the result unscaled would silently
+        #                    understate total repulsion by a factor of
+        #                    ~(n-1)/n_negative_samples, breaking the
+        #                    rho=k equilibrium-spacing balance derived in
+        #                    force_model's own docstring. The (n-1)/S factor
+        #                    is the standard Monte-Carlo correction that
+        #                    restores the same expected total magnitude the
+        #                    dense/exact sum would have given.
+        if negative_sampling:
+            neg_idx = rng.integers(0, n, size=(n, n_negative_samples))
+            self_hit = neg_idx == np.arange(n)[:, np.newaxis]
+            neg_idx = np.where(self_hit, (neg_idx + 1) % n, neg_idx)   # deflect self-samples
+
+            Y_neg = Y[neg_idx]                                          # (n, S, d)
+            diff_neg = Y_neg - Y[:, np.newaxis, :]                       # y_neg - y_i
+            d_neg = np.maximum(np.sqrt((diff_neg ** 2).sum(-1)), eps)    # (n, S)
+            e_neg = diff_neg / d_neg[:, :, np.newaxis]
+
+            if randers_repulsive:
+                raw_dot_neg = (B[:, np.newaxis, :] * diff_neg).sum(-1)
+                rho_neg = np.maximum(d_neg + raw_dot_neg, eps)
+                g_neg = e_neg + B[:, np.newaxis, :]
+            else:
+                rho_neg = d_neg
+                g_neg = e_neg
+
+            if force_model == "umap":
+                rho2b_neg = rho_neg ** (2 * b_param)
+                rep_coeff_neg = (2 * b_param * rho_neg) / ((eps + rho_neg ** 2) * (1.0 + a * rho2b_neg))
+                step = step - (rep_coeff_neg[:, :, np.newaxis] * g_neg).sum(axis=1)
+            else:  # force_model == "fr_gravity"
+                rep_coeff_neg_fr = (k_nat * k_nat) / (eps + rho_neg ** 2)
+                fr_neg_scale = (n - 1) / n_negative_samples
+                step = step - fr_neg_scale * (rep_coeff_neg_fr[:, :, np.newaxis] * g_neg).sum(axis=1)
 
         # [OURS 2026-08-06, reworked 2026-08-17 per explicit user request]
         # per-node gravity -- separate additive force, ported from

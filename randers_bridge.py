@@ -341,7 +341,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
                       apply_step=True, init_method="isomap",
                       normalize_drift_by_asymmetry=False,
-                      force_model="fr_gravity", fr_k=None):
+                      force_model="fr_gravity", fr_k=None, negative_sampling=False):
     """
     [OURS 2026-08-28, per explicit user request -- "run_located_drift
     fonksiyonunu randers_bridge'e veya randers_umap'e tasimak istiyorum,
@@ -517,7 +517,8 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                             snapshot_every=snapshot_every,
                             scale_B_fixed_by_knn_distance=normalize_drift_by_asymmetry,
                             clip_delta=clip_delta, seed=seed, verbose=verbose,
-                            force_model=force_model, fr_k=fr_k)
+                            force_model=force_model, fr_k=fr_k,
+                            negative_sampling=negative_sampling)
     Y, B = out2["Y"], out2["B"]
 
     if verbose:

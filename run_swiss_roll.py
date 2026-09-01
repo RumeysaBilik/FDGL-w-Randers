@@ -191,6 +191,18 @@ def main():
     p.add_argument("--fr-k", type=float, default=None,
                     help="natural edge length for --force-model fr_gravity. None "
                          "(default) uses the paper's own sqrt(1/n).")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-08-31, per explicit user request] only has an "
+                         "effect with --force-model umap (fr_gravity never used "
+                         "negative sampling to begin with). Default OFF -- repulsion "
+                         "is the dense sum over every non-neighbour, rescaled to match "
+                         "real UMAP's negative-sampling expectation exactly (zero "
+                         "variance). If given: TRUE per-epoch stochastic negative "
+                         "sampling instead (n_negative_samples random points per node, "
+                         "resampled every epoch, unscaled) -- same expected gradient, "
+                         "just noisier. Empirically (compare_force_models.py, swiss "
+                         "roll n=1200/400 epochs) this did not meaningfully change the "
+                         "embedding's character, see randers_umap_fit's own docstring.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="swiss_embedding")
     p.add_argument("--quiet",  action="store_true")
@@ -231,7 +243,8 @@ def main():
                                seed=args.seed, verbose=not args.quiet,
                                apply_step=not args.init_only, init_method=args.init_method,
                                normalize_drift_by_asymmetry=args.normalize,
-                               force_model=args.force_model, fr_k=args.fr_k)
+                               force_model=args.force_model, fr_k=args.fr_k,
+                               negative_sampling=args.neg_sampling)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
@@ -265,7 +278,8 @@ def main():
     if args.init_only:
         ax.set_title(f"Randers-UMAP swiss-roll, LOCATED INIT ONLY ({args.init_method}, no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP swiss-roll, located-drift init ({args.init_method})  (n={n})", fontsize=11)
+        ax.set_title(f"Randers-UMAP swiss-roll, located-drift init ({args.init_method})  "
+                     f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 

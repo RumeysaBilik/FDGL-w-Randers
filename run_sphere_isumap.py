@@ -84,6 +84,10 @@ def main():
                          "(a,b)-curve law.")
     p.add_argument("--fr-k", type=float, default=None,
                     help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-08-31] only affects --force-model umap -- see "
+                         "run_swiss_roll.py's --neg-sampling help / randers_umap_fit's "
+                         "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="sphere_embedding_isumap")
     p.add_argument("--quiet", action="store_true")
@@ -117,7 +121,8 @@ def main():
                             use_virtual_neighbor=not args.no_virtual_neighbor,
                             ramp=args.ramp, seed=args.seed,
                             snapshot_every=apply_snapshot_every, verbose=not args.quiet,
-                            force_model=args.force_model, fr_k=args.fr_k)
+                            force_model=args.force_model, fr_k=args.fr_k,
+                            negative_sampling=args.neg_sampling)
 
     if args.init_only:
         Y, B = out["snapshots"][0]["Y"], out["snapshots"][0]["B"]
@@ -156,7 +161,7 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
     drift_label = "live B (from D_asym asymmetry only)"
-    init_suffix = ", INIT ONLY (no training)" if args.init_only else ""
+    init_suffix = ", INIT ONLY (no training)" if args.init_only else f", epochs={args.epochs}"
     ax.set_title(f"Randers-UMAP sphere, isumap-derived D, {drift_label}{init_suffix}  (n={args.n})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)

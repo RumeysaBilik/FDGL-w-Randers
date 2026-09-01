@@ -61,7 +61,7 @@ def main():
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"Randers-UMAP on MNIST asymmetric distances (n={D_asym.shape[0]})", fontsize=11)
+    ax.set_title(f"Randers-UMAP on MNIST asymmetric distances (n={D_asym.shape[0]}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 
