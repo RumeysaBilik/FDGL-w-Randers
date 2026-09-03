@@ -6,7 +6,7 @@ NOT from randers_bridge.compute_dist_matrix().
 
 Deliberately pulls isumap_dist[0] (data_D, the raw pre-t-conorm/pre-Dijkstra
 neighbourhood distances from comp_graph()) exactly like asymm_dist_MNIST.py
-does -- NOT the fully-processed D. This is intentional (per user), not the
+does -- NOT the fully-processed D. This is intentional, not the
 "bug" discussed earlier: applying the t-conorm graph-merge symmetrises the
 result, which is exactly what should be avoided here. distance_graph_generation.py
 itself is untouched.
@@ -18,8 +18,7 @@ not from an injected vector field. That part is unchanged and is the whole
 point of comparison: how does isumap's own asymmetric graph behave under
 the shared force-directed update.
 
-[OURS 2026-08-18, per explicit user/advisor feedback -- "iki drift
-mekanizması çakışıyor"] B's source was changed AGAIN, this time to remove
+[OURS 2026-08-18] B's source was changed AGAIN, this time to remove
 a genuine methodological conflict, not just for style. Every earlier
 version of this file (see git history) located B via a virtual-point
 mechanism that peeked at the TRUE omega field directly (X_virtual =
@@ -47,7 +46,7 @@ omega-double-injection problem (see git history) violated this by calling
 compute_drift() live, every epoch, on the current evolving Y -- reintroducing
 exactly the kind of SGD-entangled, non-frozen B that principle was meant to
 rule out, just from a different (omega-free) source this time. [OURS
-2026-08-18, per explicit user request -- "ikisini birleştirelim"] The two
+2026-08-18] The two
 principles are reconciled in locate_B_from_D_asym() (defined below):
 B is derived ENTIRELY from D_asym's own asymmetry (compute_drift(N,
 knn_mask, k, Y_init, clip_delta), N = (D_asym-D_asym.T)/(D_asym+D_asym.T),
@@ -91,7 +90,65 @@ sys.path.insert(0, str(HERE))
 
 from run_swiss_roll import make_swiss_roll_randers
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, compute_drift
+from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds, compute_drift
+
+
+def isumap_style_init(D_asym, d=2, seed=0):
+    """
+    [OURS 2026-09-03] Real IsUMap (github.com/LUK4S-B/IsUMap, src/isumap.py,
+    `initialization="cMDS"` default) initialises its embedding with
+    classical/Torgerson MDS, NOT a UMAP-style spectral (Laplacian-eigenmap)
+    layout -- confirmed directly against IsUMap's own source. The
+    "_isumap"-suffixed scripts in this project (run_swiss_roll_isumap.py,
+    run_mammoth_isumap.py, run_sphere_isumap.py) exist specifically to test
+    how IsUMap's own asymmetric D_asym behaves under our shared
+    force-directed machinery, so their init should match IsUMap's own choice
+    -- the ONLY thing actually borrowed from UMAP in these scripts should be
+    the attractive/repulsive force computation itself, not the init method.
+
+    classical_mds() requires a dense/complete distance matrix (it
+    double-centers whole rows/columns), but this project's own D_asym here
+    (build_isumap_dist_matrix's reconstruction of data_D, the raw
+    pre-t-conorm/pre-Dijkstra neighbourhood distances) is deliberately
+    SPARSE (np.inf outside each point's own ~k-NN row) -- see
+    build_isumap_dist_matrix's own docstring for why that raw, unmerged
+    matrix is what's used for the force computation and for extracting B's
+    asymmetry. So this helper builds a SEPARATE, directed-Dijkstra-completed
+    dense copy (same recipe as MNIST/embed_MNIST_raw.py's own D_asym
+    construction) purely to get a valid input for classical_mds -- it does
+    NOT replace the sparse D_asym fed to randers_umap_fit/fuzzy_simplicial_set
+    elsewhere, so the force computation and the drift/asymmetry extraction
+    are both completely unaffected by this change; only the starting
+    position Y_init changes.
+    """
+    n = D_asym.shape[0]
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import shortest_path
+    rows, cols = np.nonzero(np.isfinite(D_asym) & (D_asym > 0))
+    nbg = csr_matrix((D_asym[rows, cols], (rows, cols)), shape=(n, n))
+    D_dense, _ = shortest_path(nbg, method="auto", directed=True, return_predecessors=True)
+
+    # [OURS 2026-09-03] a directed k-NN graph is not guaranteed strongly
+    # connected -- some (i,j) pairs can stay unreachable (inf) even after
+    # Dijkstra, especially at small n/k or for point clouds with thin
+    # regions (observed empirically on mammoth at n=150). classical_mds's
+    # double-centering (D**2, then J@D2@J) turns any remaining inf into nan
+    # across the WHOLE matrix (inf*0 / inf-inf during centering), not just
+    # the unreachable entries -- so this has to be resolved before calling
+    # it. Standard MDS practice: replace unreachable pairs with a large-but-
+    # finite fallback (here, the graph's own observed diameter), since "far
+    # apart" is a reasonable stand-in for "no directed path found" and keeps
+    # every entry finite without distorting the reachable geometry.
+    finite = np.isfinite(D_dense)
+    if not finite.all():
+        fallback = D_dense[finite].max() if finite.any() else 1.0
+        D_dense = np.where(finite, D_dense, fallback)
+        n_unreachable = int((~finite).sum())
+        print(f"isumap_style_init: {n_unreachable} directed pair(s) unreachable after "
+              f"Dijkstra -- filled with the graph's own max finite distance "
+              f"({fallback:.4f}) before classical_mds.")
+
+    return classical_mds(D_dense, d=d, seed=seed)
 
 
 def build_isumap_dist_matrix(X, k=30, verbose=True):
@@ -130,8 +187,7 @@ def build_isumap_dist_matrix(X, k=30, verbose=True):
 
 def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     """
-    [OURS 2026-08-18, per explicit user request -- reconciles two design
-    principles that were previously in tension] B originates ENTIRELY from
+    [OURS 2026-08-18] B originates ENTIRELY from
     D_asym's own asymmetry (no omega involved anywhere -- this is the
     advisor-driven fix from earlier the same day: isumap's whole premise is
     that drift can be inferred purely from an observed asymmetric
@@ -150,8 +206,16 @@ def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     on the untrained initial layout, and freezes the result.
     """
     n = D_asym.shape[0]
-    mu, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
-    Y_init = spectral_layout(mu, d=2, seed=seed)
+    # [OURS 2026-09-03] Y_init now built via isumap_style_init (real
+    # IsUMap's own cMDS choice), NOT spectral_layout -- see that helper's
+    # own docstring above for the full rationale (confirmed against
+    # IsUMap's actual GitHub source). fuzzy_simplicial_set is still called,
+    # only for knn_mask (compute_drift needs it below) -- A is discarded
+    # here, it doesn't feed Y_init anymore (no symmetrized counterpart
+    # exists to discard separately -- see fuzzy_simplicial_set's own
+    # docstring, spectral_layout has been removed project-wide).
+    _, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
+    Y_init = isumap_style_init(D_asym, d=2, seed=seed)
 
     N = (D_asym - D_asym.T) / (D_asym + D_asym.T + 1e-12)
     N = np.where(np.isfinite(N), N, 0.0)
@@ -201,13 +265,13 @@ def main():
                          "embedding (with drift-vector arrows) every N epochs, side by side. "
                          "Ignored if --init-only is also given.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for randers_umap_fit's own internal spectral "
                          "init AND the apply-step training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28, per explicit user request] see run_swiss_roll.py's "
+                    help="[OURS 2026-08-28] see run_swiss_roll.py's "
                          "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
                          "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -249,8 +313,7 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
-    # [OURS 2026-08-19, per explicit user request -- reverted back to the
-    # live mechanism] B is derived live, every epoch, purely from D_asym's
+    # [OURS 2026-08-19] B is derived live, every epoch, purely from D_asym's
     # own asymmetry (compute_drift on N=(D_asym-D_asym.T)/(D_asym+D_asym.T),
     # no omega anywhere) and the CURRENT embedding Y -- B_fixed=None.
     # locate_B_from_D_asym() (still defined above) computes the same thing
@@ -260,11 +323,22 @@ def main():
     # being None: see the 2026-08-19 fix in randers_umap.py's snapshot
     # capture, which computes the real epoch-0 compute_drift(...) value
     # there specifically so --init-only still shows a meaningful drift.
+    # [OURS 2026-09-03] init: real IsUMap's own cMDS choice
+    # (isumap_style_init, see its docstring above), NOT randers_umap_fit's
+    # internal UMAP-style spectral_layout default -- so the ONLY thing this
+    # script still borrows from UMAP is the attractive/repulsive force
+    # computation itself, per the advisor-facing goal of this "_isumap"
+    # comparison family (build_isumap_dist_matrix's own D_asym is untouched
+    # by this -- only the starting position changes).
+    if not args.quiet:
+        print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
+    Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
+
     if not args.quiet:
         print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
     out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                             n_epochs=apply_epochs, use_drift=True, B_fixed=None,
-                            d=args.proj_dim,
+                            d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,
                             use_gravity=args.gravity, gravity_strength=args.gravity_strength,
                             gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
@@ -281,7 +355,7 @@ def main():
         Y, B = out["Y"], out["B"]
 
     # ---- plot --------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]

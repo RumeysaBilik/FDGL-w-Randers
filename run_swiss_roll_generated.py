@@ -47,7 +47,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from randers_bridge import compute_dist_matrix
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, classical_mds
+from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds
 from randers_bridge import run_located_drift
 
 
@@ -128,7 +128,8 @@ def main():
                          "embedding (Y_real0) with its drift vectors (B_located).")
     p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
                     help="locate step's placement method. 'isomap' (default) = classical_mds. "
-                         "'umap' = fuzzy_simplicial_set+spectral_layout.")
+                         "'umap' is kept for backward CLI compat but is now IDENTICAL to "
+                         "'isomap' -- spectral_layout was removed project-wide.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="embedding dimension for the locate step's placement AND the apply "
                          "step's force-directed training. 2 (default) = existing 2D pipeline. "

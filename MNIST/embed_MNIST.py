@@ -31,6 +31,16 @@ def main():
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--gravity", action="store_true",
                     help="add per-node gravity = b_i (no extra scaling)")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                         "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
+                         "law, 'umap' = UMAP's own fitted (a,b)-curve.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
+                         "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
+                         "instead of the dense/exact sum.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -44,7 +54,10 @@ def main():
 
     out = randers_umap_fit(D_asym, n_neighbors=args.k, n_negative_samples=args.neg,
                             n_epochs=args.epochs, use_drift=True,
-                            use_gravity=args.gravity, seed=args.seed,
+                            use_gravity=args.gravity,
+                            force_model=args.force_model, fr_k=args.fr_k,
+                            negative_sampling=args.neg_sampling,
+                            seed=args.seed,
                             verbose=not args.quiet)
     Y, B = out["Y"], out["B"]
 

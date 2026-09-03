@@ -48,14 +48,13 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components, shortest_path
 from scipy.spatial.distance import cdist
 
-# [OURS 2026-08-28, per explicit user request -- "run_located_drift'i
-# randers_bridge'e tasimak istiyorum, butun diger dosyalar oradan ceksin"]
+# [OURS 2026-08-28]
 # run_located_drift() itself (moved here from run_swiss_roll.py, see that
 # function's own docstring below) needs randers_umap_fit's own init/fitting
 # machinery -- imported here, not the other way around, so there's no
 # circular import (randers_umap.py itself never imports from this module,
 # only mentions it in comments/docstrings).
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, classical_mds
+from randers_umap import randers_umap_fit, classical_mds
 
 
 def compute_dist_matrix(
@@ -88,8 +87,7 @@ def compute_dist_matrix(
                     so every point ends up with >= n_neighbors neighbours.
                     Pass a float to control the threshold directly instead.
                     Ignored when adjacency="knn".
-    adjacency     : [OURS 2026-08-20, per explicit user request -- "bu
-                    mantığı direkt k-nearest'a çevirip denemek istiyorum"]
+    adjacency     : [OURS 2026-08-20]
                     "threshold" (default, unchanged) = the eps-threshold
                     rule above (lwileczek/isomap style, symmetric by
                     construction: dist(i,j)==dist(j,i) so i~j iff j~i).
@@ -120,8 +118,7 @@ def compute_dist_matrix(
                     With adjacency="knn", this symmetry guarantee no longer
                     holds even before the Randers step (see adjacency above).
     path_method   : passed to scipy.sparse.csgraph.shortest_path
-    return_adjacency : [OURS 2026-08-24, per explicit user request -- building
-                    an asymmetry control metric] bool, default False. If True,
+    return_adjacency : [OURS 2026-08-24] bool, default False. If True,
                     also return `bln`, the (n, n) boolean DIRECT-neighbour mask
                     (the raw graph edges used to build the geodesic distance,
                     before shortest_path) -- needed by asymmetry_score() below,
@@ -226,8 +223,7 @@ def compute_dist_matrix(
 
 def asymmetry_score(D, bln):
     """
-    [OURS 2026-08-24, per explicit user request -- "asymmetriyi ne kadar
-    kaybettiğimizi ne kadar sakladığımızı ölçecek bir kontrol parametresi"]
+    [OURS 2026-08-24]
     Per-node, then global, control metric for how much of a distance matrix's
     magnitude is asymmetric (direction-dependent) vs symmetric, restricted to
     each point's DIRECT graph neighbours (bln) -- NOT all n-1 pairs, since
@@ -240,7 +236,7 @@ def asymmetry_score(D, bln):
         asymm_ij = abs(D[i, j] - D[j, i])
         ratio_ij = asymm_ij / (D[i, j] + D[j, i])
 
-    [OURS 2026-08-24, per explicit user request -- "0-1 arası çıksın"]
+    [OURS 2026-08-24]
     ratio_ij is in [0, 1): 0 = this edge is perfectly symmetric
     (D[i,j]==D[j,i]); approaches 1 only in the extreme case where one
     direction's distance collapses to ~0 relative to the other (never
@@ -254,8 +250,8 @@ def asymmetry_score(D, bln):
     separately, on a distance matrix built from a trained embedding (e.g. via
     the same canonical Randers formula evaluated on Y, B) to compare the two
     scores and see how much of the original asymmetry survived the embedding
-    -- that comparison is the "ne kadar kaybettik / ne kadar sakladık" number,
-    this function itself just computes the score for ONE given matrix.
+    -- that comparison is the "how much was lost / how much was preserved"
+    number, this function itself just computes the score for ONE given matrix.
 
     Parameters
     ----------
@@ -289,8 +285,7 @@ def asymmetry_score(D, bln):
 
 def asymmetry_score_from_raw(D_raw):
     """
-    [OURS 2026-08-24, per explicit user request -- "isumapler için nasıl
-    uygulayabiliriz"] asymmetry_score() wrapper for RAW, sparse/inf-filled
+    [OURS 2026-08-24] asymmetry_score() wrapper for RAW, sparse/inf-filled
     distance matrices -- the kind build_isumap_dist_matrix() (in
     run_swiss_roll_isumap.py / run_mammoth_isumap.py / run_sphere_isumap.py)
     hands back, via distance_graph_generation(), rather than
@@ -334,6 +329,27 @@ def asymmetry_score_from_raw(D_raw):
     return asymmetry_score(D_complete, bln)
 
 
+def reconstruct_rho(Y, B):
+    """
+    [OURS 2026-09-01] rho(i->j) = ||y_i-y_j|| + b_i.(y_j-y_i) -- the SAME formula
+    randers_umap_fit's own training loop uses internally, standalone here
+    so asymmetry_score() can be evaluated on the TRAINED embedding's own
+    reconstructed distances, not just on the raw input D_asym (which is
+    all run_located_drift computed before this change -- see
+    asymmetry_score_final below). Previously duplicated in test.py,
+    MNIST/compare_live_vs_frozen_direction.py, and compare_force_models.py;
+    this is the one copy run_located_drift itself uses, those three files'
+    own copies are untouched (not worth the churn of switching every
+    caller over just for this).
+    """
+    diff = Y[np.newaxis, :, :] - Y[:, np.newaxis, :]
+    d = np.sqrt((diff ** 2).sum(-1))
+    proj = (B[:, np.newaxis, :] * diff).sum(-1)
+    rho = d + proj
+    np.fill_diagonal(rho, 0.0)
+    return rho
+
+
 def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       epochs=500, clip_delta=0.01, use_gravity=False,
                       gravity_strength=1.0, gravity_neighbor_weight=True,
@@ -343,9 +359,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       normalize_drift_by_asymmetry=False,
                       force_model="fr_gravity", fr_k=None, negative_sampling=False):
     """
-    [OURS 2026-08-28, per explicit user request -- "run_located_drift
-    fonksiyonunu randers_bridge'e veya randers_umap'e tasimak istiyorum,
-    butun diger runladigimiz dosyalar oradan cekse"] Moved here verbatim
+    [OURS 2026-08-28] Moved here verbatim
     from run_swiss_roll.py (where it was originally defined and where every
     other run_*.py/test.py/drift_magnitude_test.py/stability_check.py
     imported it from) -- randers_bridge.py is the natural home since this
@@ -360,16 +374,15 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     stability_check.py's own diagnostics all call the exact same code -- no
     duplication.
 
-    adjacency : [OURS 2026-08-20, per explicit user request -- "bu mantığı
-        direkt k-nearest'a çevirip denemek istiyorum"] "threshold" (default,
+    adjacency : [OURS 2026-08-20] "threshold" (default,
         unchanged) or "knn", forwarded to BOTH compute_dist_matrix calls
         below (locate step's D_sym_aug AND apply step's D_asym). See
         compute_dist_matrix's own adjacency docstring above for the full
         explanation of the difference.
 
-    proj_dim : [OURS 2026-08-20, per explicit user request] int, default 2.
+    proj_dim : [OURS 2026-08-20] int, default 2.
         Embedding dimension for BOTH the locate step's placement
-        (classical_mds/spectral_layout) and the apply step's
+        (classical_mds) and the apply step's
         randers_umap_fit call. randers_umap_fit's own `d` parameter
         already supports arbitrary dimension -- this was previously
         hardcoded to 2 at every call site in this file. Pass 3 for a full
@@ -384,14 +397,17 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                     only a_i (each real point's own position) trains each
                     epoch, b_i is never touched.
 
-    init_method : [OURS 2026-08-16, per explicit user request] "umap"
-        (default, unchanged) uses fuzzy_simplicial_set+spectral_layout --
-        UMAP's own Laplacian-eigenmap init. "isomap" uses classical_mds
-        instead -- Isomap's own finishing step (D_sym_aug here is already
-        Isomap-style k-NN+Dijkstra via compute_dist_matrix, fully dense, so
-        this makes the WHOLE pipeline consistently Isomap, not just the
-        distance construction). Only affects STEP 1's placement method;
-        everything else (B extraction, apply-step training) is identical.
+    init_method : [OURS 2026-08-16] "isomap" (default) uses classical_mds --
+        Isomap's own finishing step (D_sym_aug here is already Isomap-style
+        k-NN+Dijkstra via compute_dist_matrix, fully dense, so this makes
+        the WHOLE pipeline consistently Isomap, not just the distance
+        construction). [OURS 2026-09-03] "umap" is kept as a valid choice
+        only so existing CLI flags don't break -- it used to use
+        fuzzy_simplicial_set+spectral_layout (UMAP's own Laplacian-eigenmap
+        init) but spectral_layout has been removed project-wide, so "umap"
+        is now IDENTICAL to "isomap" (both call classical_mds). Only
+        affects STEP 1's placement method; everything else (B extraction,
+        apply-step training) is identical regardless of this choice.
 
     snapshot_every : [OURS 2026-08-11] int or None. If given, forwarded to
         the APPLY step's randers_umap_fit call only (the locate step's
@@ -399,10 +415,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         every snapshot_every epochs, from the initial Y_real0 through to
         the final embedding, for a "training trajectory" plot.
 
-    normalize_drift_by_asymmetry : [OURS 2026-08-25, per explicit user
-        request -- "default eskisi gibi normalize edilmeden olsun, --normalize
-        flagi verirsek normalize etsin", later changed to "direkt kth nearest
-        neighbouruna gore yapicaz"] bool, default False (off -- exact prior
+    normalize_drift_by_asymmetry : [OURS 2026-08-25] bool, default False (off -- exact prior
         behaviour, B_located used as-is, frozen direction AND magnitude for
         the whole run). If True: B_located's DIRECTION stays exactly as
         located, but its MAGNITUDE is replaced every epoch with that node's
@@ -448,10 +461,19 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
             print(f"Locate: classical_mds on the augmented graph (no training)...")
         Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
     elif init_method == "umap":
+        # [OURS 2026-09-03] spectral_layout has been removed project-wide
+        # (see randers_umap.classical_mds's own docstring for the full
+        # rationale -- confirmed against real IsUMap's own source that
+        # cMDS, not a UMAP-style spectral/Laplacian-eigenmap init, is the
+        # right default everywhere in this project). init_method="umap" is
+        # kept as a valid choice only so existing CLI flags across the
+        # run_*.py scripts don't break -- it is now IDENTICAL to
+        # init_method="isomap" (both call classical_mds), not a distinct
+        # spectral alternative anymore.
         if verbose:
-            print(f"Locate: spectral_layout on the augmented graph (no training)...")
-        mu_aug, _ = fuzzy_simplicial_set(D_sym_aug, emb_k)
-        Y_aug0 = spectral_layout(mu_aug, d=proj_dim, seed=seed)
+            print(f"Locate: classical_mds on the augmented graph (init_method='umap' is now "
+                  f"identical to 'isomap' -- spectral_layout was removed project-wide)...")
+        Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
     else:
         raise ValueError(f"init_method must be 'umap' or 'isomap', got {init_method!r}")
     Y_real0, Y_virtual0 = Y_aug0[:n], Y_aug0[n:]
@@ -483,7 +505,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                                     randers_field=omega, adjacency=adjacency,
                                     return_adjacency=True)
 
-    # [OURS 2026-08-24, per explicit user request] control metric -- how much
+    # [OURS 2026-08-24] control metric -- how much
     # of D_asym's magnitude, on average over each node's real graph
     # neighbours, is asymmetric (direction-dependent) vs symmetric. See
     # asymmetry_score's own docstring above for the exact formula.
@@ -495,8 +517,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
               f"(mean |d_ij-d_ji| / mean-dist, averaged over each node's real "
               f"neighbours, then over all nodes -- 0 = fully symmetric)")
 
-    # [OURS 2026-08-25, per explicit user request -- "normalizasyonu
-    # degistirip direkt kth nearest neighbouruna gore yapicaz"] default
+    # [OURS 2026-08-25] default
     # False = exact prior behaviour, B_located used as-is (frozen
     # direction AND magnitude for the whole run). True: B_located's
     # DIRECTION stays exactly as located, but its MAGNITUDE is replaced,
@@ -521,10 +542,27 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                             negative_sampling=negative_sampling)
     Y, B = out2["Y"], out2["B"]
 
+    # [OURS 2026-09-01] asymmetry_score computed a SECOND time, now on
+    # the FINAL trained embedding's own reconstructed distances
+    # (rho(i->j) = ||y_i-y_j|| + b_i.(y_j-y_i), evaluated at the trained Y
+    # and B), using the SAME real-edge mask (bln_asym) as the target score
+    # above -- so the two numbers are directly comparable: asym_global is
+    # "how asymmetric D_asym itself is" (the target, fixed before training
+    # ever starts), asym_global_final is "how much of that asymmetry the
+    # trained embedding actually reproduces". Always computed (same O(n^2)
+    # cost as a single training epoch, negligible next to the training loop
+    # itself) and stashed in the result dict; printed automatically when
+    # verbose, right after the extent/||b|| summary line.
+    rho_final = reconstruct_rho(Y, B)
+    asym_per_node_final, asym_global_final = asymmetry_score(rho_final, bln_asym)
+
     if verbose:
         bn = np.linalg.norm(B, axis=1)
         print(f"\nextent={Y.max()-Y.min():.2f}  mean||b||={bn.mean():.4f}  "
               f"max||b||={bn.max():.4f}  clipped={(bn >= limit - 1e-9).sum()}/{n}")
+        pct = 100.0 * asym_global_final / max(asym_global, 1e-12)
+        print(f"asymmetry_score (final embedding): {asym_global_final:.4f}  "
+              f"vs target (D_asym) {asym_global:.4f}  -- {pct:.1f}% of target asymmetry preserved")
 
     # [OURS 2026-08-28] key names kept EXACTLY as run_swiss_roll.py's
     # original ("asymmetry_score"/"asymmetry_per_node", not "asym_global"/
@@ -534,8 +572,9 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     # real interface, not just internal naming.
     result = {"Y": Y, "B": B, "D_asym": D_asym,
               "Y_real0": Y_real0, "Y_virtual0": Y_virtual0, "B_located": B_located,
-              "asymmetry_score": asym_global, "asymmetry_per_node": asym_per_node}
+              "asymmetry_score": asym_global, "asymmetry_per_node": asym_per_node,
+              "asymmetry_score_final": asym_global_final,
+              "asymmetry_per_node_final": asym_per_node_final}
     if snapshot_every is not None:
         result["snapshots"] = out2["snapshots"]
     return result
-    return asymmetry_score(D_complete, bln)

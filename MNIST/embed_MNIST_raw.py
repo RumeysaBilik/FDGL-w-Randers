@@ -7,10 +7,10 @@ Randers-UMAP pipeline, per the advisor's first suggested approach ([OURS
 dimension'a cekip sonra metodumuzu uygulamak" -- this file implements
 option 1, the controlled counterpart to embed_MNIST_pca.py's option 2).
 
-Per explicit user decision, this is NOT the advisor's original label/
+This is NOT the advisor's original label/
 virtual-point-drift idea (that was tried once as embed_MNIST_isomap_locate.py
-and explicitly reverted -- "bundan vazgectim... sadece isumapten uretilen
-driftleri kullanip bunlari FDGL'e besledigimiz hali kalsin"). This script
+and explicitly reverted in favour of using only the drifts produced by
+IsUMap itself, fed into FDGL). This script
 is instead byte-for-byte the SAME mechanism as embed_MNIST_pca.py (IsUMap's
 own distance_graph_generation for the asymmetric distance, our own
 randers_umap_fit for the embedding, including the i==j key-extraction fix
@@ -83,6 +83,16 @@ def main():
                          "randers_umap_fit's own internal default (ramp=True) would otherwise "
                          "apply silently -- passing ramp=args.ramp here makes it explicit and "
                          "off by default, consistent with the other run_*.py scripts.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                         "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
+                         "law, 'umap' = UMAP's own fitted (a,b)-curve.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
+                         "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
+                         "instead of the dense/exact sum.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_raw_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -146,6 +156,8 @@ def main():
                                 gravity_strength=args.gravity_strength,
                                 gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
                                 ramp=args.ramp,
+                                force_model=args.force_model, fr_k=args.fr_k,
+                                negative_sampling=args.neg_sampling,
                                 seed=args.seed, verbose=verbose)
     Y, B = out["Y"], out["B"]
 

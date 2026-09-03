@@ -19,9 +19,7 @@ DIRECTION is handled:
      (see that file for the full derivation/history) -- ported here
      unchanged, just applied to MNIST's own D_asym instead of swiss roll's.
 
-[OURS 2026-08-28, per explicit user request -- "bir MNIST datasinin
-sonuclarini 100 epochta fixed direction drift ve su anki hali ile
-karsilastirir misin"]
+[OURS 2026-08-28]
 
 Why the comparison is fair: D_asym itself is built ONCE and reused for both
 runs (same k, same distance_graph_generation call) -- the only thing that
@@ -64,7 +62,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, compute_drift
+from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds, compute_drift
 
 
 def load_data(args):
@@ -108,16 +106,23 @@ def build_D_asym(X, k, verbose):
 
 def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     """
-    Ported unchanged from run_swiss_roll_isumap.py -- B derived ENTIRELY
+    Ported from run_swiss_roll_isumap.py -- B derived ENTIRELY
     from D_asym's own asymmetry (no ground truth involved anywhere), but
-    computed ONCE on the untrained spectral_layout init and FROZEN, instead
+    computed ONCE on the untrained init and FROZEN, instead
     of live/per-epoch. See that file's own module docstring for the full
     history of why this specific mechanism (not virtual-point, not live)
     was settled on for a "frozen direction" comparison.
+
+    [OURS 2026-09-03] Y_init now built via classical_mds (spectral_layout
+    has been removed project-wide -- see randers_umap.classical_mds's own
+    docstring). D_asym here is already dense/complete (build_D_asym runs a
+    directed Dijkstra completion before this is ever called), so no extra
+    densifying step is needed the way run_swiss_roll_isumap.py's
+    isumap_style_init requires for its own (deliberately sparse) D_asym.
     """
     n = D_asym.shape[0]
-    mu, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
-    Y_init = spectral_layout(mu, d=2, seed=seed)
+    _, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
+    Y_init = classical_mds(D_asym, d=2, seed=seed)
     N = (D_asym - D_asym.T) / (D_asym + D_asym.T + 1e-12)
     N = np.where(np.isfinite(N), N, 0.0)
     B_located = compute_drift(N, knn_mask, emb_k, Y_init, clip_delta=clip_delta)

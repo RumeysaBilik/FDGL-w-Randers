@@ -43,7 +43,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from run_sphere_tangential import make_sphere_points
-from run_swiss_roll_isumap import build_isumap_dist_matrix
+from run_swiss_roll_isumap import build_isumap_dist_matrix, isumap_style_init
 from randers_umap import randers_umap_fit
 
 
@@ -72,13 +72,13 @@ def main():
                          "internal epoch-0 snapshot and returns that pre-training state.")
     p.add_argument("--snapshot-every", type=int, default=None)
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for randers_umap_fit's own internal spectral "
                          "init AND the apply-step training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28, per explicit user request] see run_swiss_roll.py's "
+                    help="[OURS 2026-08-28] see run_swiss_roll.py's "
                          "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
                          "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -110,11 +110,18 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
+    # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
+    # run_swiss_roll_isumap.py's isumap_style_init docstring), NOT
+    # randers_umap_fit's internal UMAP-style spectral_layout default.
+    if not args.quiet:
+        print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
+    Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
+
     if not args.quiet:
         print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
     out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                             n_epochs=apply_epochs, use_drift=True, B_fixed=None,
-                            d=args.proj_dim,
+                            d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,
                             use_gravity=args.gravity, gravity_strength=args.gravity_strength,
                             gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
@@ -130,7 +137,7 @@ def main():
         Y, B = out["Y"], out["B"]
 
     # ---- plot --------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
@@ -145,8 +152,7 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20, per explicit user request -- "finslermds'in swiss
-        # rollda haliyle yaptığı gibi eksene oturt"] matplotlib's DEFAULT 3D
+        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
         # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
         # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")

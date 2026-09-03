@@ -5,7 +5,7 @@ a TANGENTIAL (azimuthal) Randers field, using the EXACT SAME pipeline as
 run_swiss_roll.py / run_mammoth.py (run_located_drift, imported directly,
 not duplicated).
 
-[OURS 2026-08-19, per explicit user request] New synthetic dataset,
+[OURS 2026-08-19] New synthetic dataset,
 parallel to the swiss roll: a sphere has no boundary and no single natural
 "unrolled" 1D coordinate like the swiss roll's t, so (like mammoth) we use
 an intrinsic coordinate purely for colouring plots -- here, theta, the
@@ -133,23 +133,24 @@ def main():
     p.add_argument("--init-only", action="store_true")
     p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
                     help="locate step's placement method. 'isomap' (default) = classical_mds. "
-                         "'umap' = fuzzy_simplicial_set+spectral_layout.")
+                         "'umap' is kept for backward CLI compat but is now IDENTICAL to "
+                         "'isomap' -- spectral_layout was removed project-wide.")
     p.add_argument("--alpha", type=float, default=0.5, help="||omega|| for the tangential drift field (constant)")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for the locate step's placement AND the apply "
                          "step's force-directed training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="[OURS 2026-08-20, per explicit user request] how "
+                    help="[OURS 2026-08-20] how "
                          "compute_dist_matrix builds its base adjacency graph -- see "
                          "run_swiss_roll.py's --adjacency help / randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation. 'threshold' (default) = unchanged. 'knn' = TRUE "
                          "per-point k-nearest-neighbours membership, asymmetric in general.")
     p.add_argument("--normalize", action="store_true",
-                    help="[OURS 2026-08-25, per explicit user request] default OFF -- "
+                    help="[OURS 2026-08-25] default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
@@ -236,7 +237,7 @@ def main():
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
@@ -251,8 +252,7 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20, per explicit user request -- "finslermds'in swiss
-        # rollda haliyle yaptığı gibi eksene oturt"] matplotlib's DEFAULT 3D
+        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
         # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
         # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")

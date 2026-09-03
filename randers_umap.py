@@ -124,12 +124,26 @@ def smooth_knn_dist(knn_dist: np.ndarray, k: int, n_iter: int = 64,
 
 def fuzzy_simplicial_set(D: np.ndarray, k: int):
     """
-    [UMAP Section 3.1] Build the symmetric fuzzy graph mu (n,n) from an
-    input dissimilarity matrix D (may be asymmetric -- our D_asym).
+    [UMAP Section 3.1] Build the fuzzy graph from an input dissimilarity
+    matrix D (may be asymmetric -- our D_asym).
+
+    [OURS 2026-09-02] Returns the raw, directed A -- used for the force
+    computation's attr_coeff/rep_coeff weighting (directionally consistent
+    with D_asym itself being asymmetric, and with rho_r(i->j) in
+    randers_umap_fit's main loop already being asymmetric via the
+    Randers/drift substitution b_i.(y_j-y_i)). [OURS 2026-09-03] The
+    symmetrized t-conorm mu_sym this used to also return is GONE -- it
+    existed for exactly one reason (spectral_layout's eigh() needs a
+    symmetric affinity matrix), and spectral_layout itself has now been
+    removed project-wide in favour of classical_mds for every init (see
+    classical_mds's own docstring, and run_swiss_roll_isumap.py's
+    isumap_style_init) -- so mu_sym had no remaining purpose.
 
     Returns
     -------
-    mu       : (n, n) symmetric weighted adjacency, mu_ii = 0
+    A        : (n, n) RAW, directed weighted adjacency (A[i,j] need not
+               equal A[j,i]), A_ii = 0. Use this for the force computation's
+               attr_coeff/rep_coeff weighting.
     knn_mask : (n, n) bool -- i's k nearest neighbours (row-wise, from D)
                used later to restrict the drift sum to N_k(i)
     """
@@ -141,25 +155,13 @@ def fuzzy_simplicial_set(D: np.ndarray, k: int):
     for i in range(n):
         w = np.exp(-np.maximum(0.0, knn_dist[i] - rho[i]) / sigma[i])
         A[i, knn_idx[i]] = w
-
-    # [OURS 2026-08-14] re-enabled -- this was commented out, leaving mu as
-    # the raw asymmetric row-wise adjacency A. That silently broke
-    # spectral_layout(): np.linalg.eigh() only reads the lower triangle of
-    # its input by default, so an asymmetric mu fed into the normalised
-    # Laplacian there was throwing away half the graph's information,
-    # producing a degenerate (collapsed-onto-two-lines) spectral init
-    # instead of a meaningful one. Confirmed side-by-side against real
-    # umap-learn's own fuzzy_simplicial_set+spectral_layout on identical
-    # input: real graph was symmetric, ours wasn't, and only the symmetric
-    # one gave a coherent swiss-roll-shaped init at epoch 0.
-    mu = A + A.T - A * A.T   # probabilistic t-conorm  [UMAP Eq. Section 3.1]
-    np.fill_diagonal(mu, 0.0)
+    np.fill_diagonal(A, 0.0)
 
     knn_mask = np.zeros((n, n), dtype=bool)
     rows = np.repeat(np.arange(n), k)
     knn_mask[rows, knn_idx.ravel()] = True
 
-    return mu, knn_mask
+    return A, knn_mask
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,67 +185,49 @@ def find_ab_params(spread: float = 1.0, min_dist: float = 0.1):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Spectral initialisation  [UMAP Section 3.2, "spectral layout"]
-# ─────────────────────────────────────────────────────────────────────────────
-def spectral_layout(mu: np.ndarray, d: int, seed: int = 0) -> np.ndarray:
-    """
-    Graph-Laplacian spectral embedding of mu, used as the SGD starting
-    point instead of random init [UMAP: "faster convergence and greater
-    stability"]. n=232 is small enough for a dense eigh.
-    """
-    n = mu.shape[0]
-    deg = mu.sum(axis=1)
-    deg_safe = np.maximum(deg, 1e-12)
-    D_inv_sqrt = np.diag(1.0 / np.sqrt(deg_safe))
-    L_sym = np.eye(n) - D_inv_sqrt @ mu @ D_inv_sqrt   # normalised Laplacian
-
-    vals, vecs = np.linalg.eigh(L_sym)
-    # skip the trivial (near-zero) eigenvalue/eigenvector
-    idx = np.argsort(vals)[1:d + 1]
-    Y = vecs[:, idx].astype(np.float64)
-
-    # tiny random jitter to break any residual degeneracy, matches UMAP's
-    # own practice of adding small noise to the spectral embedding
-    rng = np.random.default_rng(seed)
-    Y = Y + rng.normal(scale=1e-4, size=Y.shape)
-
-    # rescale to a sane initial extent (UMAP scales spectral init to ~10)
-    Y = 10.0 * Y / (np.abs(Y).max() + 1e-12)
-    return Y
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3b. Classical/Torgerson MDS initialisation  [Isomap's own finishing step]
+# 3. Classical/Torgerson MDS initialisation  [Isomap's own finishing step]
 # ─────────────────────────────────────────────────────────────────────────────
 def classical_mds(D: np.ndarray, d: int, seed: int = 0) -> np.ndarray:
     """
     Classical/Torgerson MDS:
     eigendecompose the double-centered squared distance matrix,
     Y = U * sqrt(v). This is Isomap's OWN finishing step (confirmed via the
-    IsUMap paper's own words this session: "when we forgo local
-    modifications... our approach essentially becomes an implementation of
-    the Isomap algorithm" -- and sklearn's Isomap._fit_transform: k-NN +
-    Dijkstra geodesics, then KernelPCA(kernel="precomputed") on
-    -0.5*dist_matrix**2, which is exactly this).
+    IsUMap paper's own words: "when we forgo local modifications... our
+    approach essentially becomes an implementation of the Isomap algorithm"
+    -- and sklearn's Isomap._fit_transform: k-NN + Dijkstra geodesics, then
+    KernelPCA(kernel="precomputed") on -0.5*dist_matrix**2, which is exactly
+    this). Also confirmed directly against real IsUMap's own GitHub source
+    (github.com/LUK4S-B/IsUMap, src/isumap.py): its `isumap()` function
+    defaults to `initialization="cMDS"` -- this IS IsUMap's own init choice.
 
-    Alternative to spectral_layout() for run_located_drift's locate step
-    (--init-method isomap): D is already built Isomap-style (k-NN +
-    Dijkstra via randers_bridge.compute_dist_matrix, fully dense/complete
-    -- no sparse/inf issue like isumap's data_D), so this makes the WHOLE
-    pipeline consistently Isomap (distances AND embedding), not just the
-    distance construction. Motivated by this session's empirical finding
-    that spectral/force-directed init tends to fragment this kind of
-    geodesic-distance data, while Isomap-style classical MDS is
-    specifically known (Tenenbaum et al. 2000) to unroll a swiss roll
-    cleanly, and DAGES's own Isomap init (checked directly this session)
-    was clean/non-fragmented.
+    [OURS 2026-09-03] This is now the ONLY init method in the project --
+    spectral_layout() (UMAP's own Laplacian-eigenmap init) has been removed
+    entirely. Every randers_umap_fit call either passes an explicit
+    Y_init_override (built via this function, possibly after densifying an
+    incomplete D_asym -- see run_swiss_roll_isumap.py's isumap_style_init)
+    or falls through to this function being called internally, below, on
+    D_asym itself. The whole point of this project's method is the
+    attractive/repulsive FORCE computation (borrowed from UMAP); nothing
+    about the starting position needs to come from UMAP too, and Isomap-
+    style classical MDS is specifically known (Tenenbaum et al. 2000) to
+    unroll manifolds like a swiss roll cleanly, unlike spectral/force-
+    directed init which tends to fragment this kind of geodesic-distance
+    data (an empirical finding from earlier in this project).
 
-    Requires D to be dense/complete -- unlike spectral_layout, which
-    tolerates a sparse fuzzy graph, classical MDS's double-centering sums
-    whole rows/columns, so missing/inf entries would contaminate every
-    row/column.
+    Requires D to be dense/complete (no np.inf) -- double-centering sums
+    whole rows/columns, so missing/unreachable entries would contaminate
+    every row/column via inf/nan propagation. [OURS 2026-09-03] Any
+    remaining np.inf (e.g. directed k-NN graphs are not guaranteed strongly
+    connected, so Dijkstra-completion can still leave some pairs
+    unreachable -- observed empirically on mammoth at small n) is replaced
+    with the matrix's own max finite distance before centering, so this
+    function is safe to call on any D_asym, complete or not.
     """
     n = D.shape[0]
+    finite = np.isfinite(D)
+    if not finite.all():
+        fallback = D[finite].max() if finite.any() else 1.0
+        D = np.where(finite, D, fallback)
     D2 = D ** 2
     J = np.eye(n) - np.ones((n, n)) / n
     B = -0.5 * J @ D2 @ J
@@ -252,9 +236,13 @@ def classical_mds(D: np.ndarray, d: int, seed: int = 0) -> np.ndarray:
     vals_d = np.clip(vals[idx], 0.0, None)
     Y = vecs[:, idx] * np.sqrt(vals_d)[None, :]
 
-    # match spectral_layout's scale convention (UMAP scales its own init to
-    # ~10) so downstream min_dist/spread-tuned force-directed training sees
-    # a comparable starting extent regardless of which init method was used
+    # tiny random jitter to break any residual degeneracy (matches the old
+    # spectral_layout's own practice of adding small noise)
+    rng = np.random.default_rng(seed)
+    Y = Y + rng.normal(scale=1e-4, size=Y.shape)
+
+    # rescale to a sane initial extent (UMAP scales its own spectral init to
+    # ~10; kept for comparability with prior runs/plots)
     Y = 10.0 * Y / (np.abs(Y).max() + 1e-12)
     return Y
 
@@ -380,9 +368,7 @@ def randers_umap_fit(
     rho, g instead of d, e. b_i=0 for every i recovers exactly vanilla
     UMAP (use_drift=False), since then rho=d, g=e.
 
-    force_model : [OURS 2026-08-28, per explicit user request -- "force
-        directed graph layoutını tamamen buna geçirelim ve default bu
-        olsun"] "fr_gravity" (NEW DEFAULT) or "umap" (the original
+    force_model : [OURS 2026-08-28] "fr_gravity" (NEW DEFAULT) or "umap" (the original
         mechanism, exact prior behaviour, use force_model="umap" to get it
         back).
 
@@ -416,15 +402,23 @@ def randers_umap_fit(
         "umap" instead uses UMAP's own fitted (a,b)-curve law (Section 3.2,
         unchanged from before this flag existed):
 
-            attr_coeff(rho) = 2*a*b*rho^(2b-1) / (1+a*rho^(2b))   [x mu]
-            rep_coeff(rho)  = 2*b*rho / (rho^2*(1+a*rho^(2b)))    [x (1-mu), rescaled]
+            attr_coeff(rho) = 2*a*b*rho^(2b-1) / (1+a*rho^(2b))   [x A, directed]
+            rep_coeff(rho)  = 2*b*rho / (rho^2*(1+a*rho^(2b)))    [x (1-A), rescaled]
+
+        [OURS 2026-09-02] A here is fuzzy_simplicial_set's RAW, directed
+        per-row membership (A[i,j] need not equal A[j,i]). [OURS 2026-09-03]
+        There is no symmetrized counterpart anymore -- the t-conorm mu_sym
+        this used to also compute existed only to feed spectral_layout's
+        init, and spectral_layout has since been removed project-wide (see
+        classical_mds's own docstring); A is now the only membership matrix
+        fuzzy_simplicial_set returns.
 
         Edges for "fr_gravity"'s attraction term are the UNDIRECTED union
         of the UMAP k-NN graph (knn_mask | knn_mask.T -- the natural binary
-        analogue of "umap"'s own fuzzy union mu = A+A.T-A*A.T), not mu
-        itself: the paper's f_a is a binary 0/1 law (an edge either exists
-        or it doesn't), so there is no continuous membership weight to
-        reuse here the way "umap" uses mu/(1-mu). Repulsion, like the
+        analogue of A+A.T-A*A.T), not A itself: the paper's f_a is a binary
+        0/1 law (an edge either exists or it doesn't), so there is no
+        continuous membership weight to reuse here the way "umap" uses
+        A/(1-A). Repulsion, like the
         paper's own f_r, applies to every pair unconditionally -- no
         rep_scale negative-sampling correction (that correction exists
         specifically to approximate UMAP's own stochastic negative
@@ -436,12 +430,10 @@ def randers_umap_fit(
         default, k = sqrt(1/n) (their Section 2.1) -- a's natural length
         chosen so a single K2 edge has length k in a unit-area layout.
         Override to tune the attraction/repulsion balance for this
-        project's own embedding scale (spectral_layout's output is not
+        project's own embedding scale (classical_mds's output is not
         guaranteed to sit in the paper's assumed unit-area regime).
 
-    negative_sampling : [OURS 2026-08-31, per explicit user request --
-        "negative sampling fikrini uygulayabilir miyiz" / later extended,
-        "FR'a da uygulayalım"] bool, default False (no-op, exact prior
+    negative_sampling : [OURS 2026-08-31] bool, default False (no-op, exact prior
         behaviour). Affects BOTH force_model values, but the two behave
         differently since their DENSE (default) repulsion already means
         something different in each:
@@ -461,7 +453,7 @@ def randers_umap_fit(
 
         force_model="fr_gravity": Bannister et al.'s own algorithm has NO
         sampling at all -- dense/default repulsion is the EXACT sum over
-        every one of the n-1 other points, unconditionally (no mu/(1-mu)
+        every one of the n-1 other points, unconditionally (no A/(1-A)
         neighbour discount the way "umap" has). True: same per-node random
         draw as above, but the sampled sum is RESCALED by
         (n-1)/n_negative_samples -- without this, sampling only S of the
@@ -492,10 +484,15 @@ def randers_umap_fit(
         given.
 
     force_edges : [OURS 2026-08-05] (m,2) int array of (i,j) index pairs,
-        or None. For each pair, mu[i,j]=mu[j,i]=1.0 is set AFTER the
-        normal k-NN fuzzy graph construction -- i.e. these edges get a
-        guaranteed maximal attractive weight regardless of whether they
-        would have ranked in the top n_neighbors on distance alone. Used
+        or None. For each pair, set AFTER the normal k-NN fuzzy graph
+        construction -- i.e. these edges get a guaranteed maximal
+        attractive weight regardless of whether they would have ranked in
+        the top n_neighbors on distance alone. [OURS 2026-09-02] Applied
+        as A[i,j]=1.0 (directed -- force_edges is i's own individual
+        constraint, does not need to imply the reverse) on the membership
+        A actually used by the force computation. [OURS 2026-09-03] No
+        longer also applied to a symmetrized counterpart -- there isn't
+        one anymore (see fuzzy_simplicial_set's own docstring). Used
         by frozen_drift.py's joint (2n)-point embedding: a real node and
         its own virtual target must stay attractively linked, but generic
         k-NN competition among 2n-1 other points does not guarantee this
@@ -504,7 +501,7 @@ def randers_umap_fit(
         pure repulsion for the whole run and a badly degenerate result).
 
     Y_init_override : [OURS 2026-08-05] (n,d) array, or None. If given,
-        used instead of spectral_layout() as the starting position. Also
+        used instead of classical_mds() as the starting position. Also
         needed by frozen_drift.py's joint embedding: even WITH
         force_edges guaranteeing an attractive edge, the UMAP force curve
         weakens at large distance (attr_coeff ~ 1/rho as rho -> infinity,
@@ -517,8 +514,7 @@ def randers_umap_fit(
         force-directed loop only has to find the right LOCAL offset, not
         travel cross-embedding first.
 
-    use_gravity : [OURS 2026-08-06, reworked 2026-08-17 per explicit user
-        request] bool, default False (disabled, reproduces prior behaviour
+    use_gravity : [OURS 2026-08-06, reworked 2026-08-17] bool, default False (disabled, reproduces prior behaviour
         exactly). If True, an extra SEPARATE additive force pulls each node i
         toward its own per-node target xi_i = y_i + b_i -- Bannister et al.'s
         social-gravity force (arXiv:1209.0748):
@@ -530,7 +526,7 @@ def randers_umap_fit(
         f_g(i) = gamma * M[i] * b_i -- see gravity_strength below for gamma_t,
         and gravity_neighbor_weight for the second 2026-08-17 change.
 
-        [OURS 2026-08-17, per explicit user request] Previously this force
+        [OURS 2026-08-17] Previously this force
         was applied UNCONDITIONALLY at every epoch, regardless of whether
         ||b_i|| was small (a plausible, nearby target) or large (an implausible
         one relative to i's actual local neighbour scale) -- a constant push
@@ -548,21 +544,21 @@ def randers_umap_fit(
         drift vector, unconditional, gamma tunable) was previously tried on
         finsler_mds.py's free-B model (see Gravity_Report.tex): once that
         model's B-init bug was fixed, no gamma>0 showed a measurable benefit
-        over the gamma=0 baseline there. Per explicit user instruction
-        (2026-08-17), that earlier null result is NOT treated as a reason to
+        over the gamma=0 baseline there. That earlier null result (2026-08-17)
+        is NOT treated as a reason to
         skip re-testing here -- this is a structurally different force basis
         (UMAP's Phi-curve vs. plain Adam-optimised distance-fit loss) AND a
         structurally different force (neighbour-weighted, not unconditional),
         so the earlier result does not obviously carry over.
 
-    gravity_strength : [OURS 2026-08-17, per explicit user request] float,
+    gravity_strength : [OURS 2026-08-17] float,
         default 1.0. This IS gamma_t from Bannister et al.'s formula above --
         previously absent entirely (force was hardcoded to exactly M[i]*b_i,
         gamma implicitly 1, no separate knob). Now an explicit, sweepable
         multiplier, matching the paper's own notation. Only has any effect
         when use_gravity=True.
 
-    gravity_neighbor_weight : [OURS 2026-08-17, per explicit user request]
+    gravity_neighbor_weight : [OURS 2026-08-17]
         bool, default True. If True, the gravity force on node i is scaled by
         a per-node weight w_i, computed as an UMAP-style exponential
         membership weight --
@@ -589,8 +585,7 @@ def randers_umap_fit(
     node_mass : [OURS 2026-08-06] (n,) per-node mass M[i], used only if
         use_gravity=True. None (default) uses M[i]=1 for all nodes (uniform).
 
-    randers_attractive, randers_repulsive : [OURS 2026-08-24, per explicit
-        user request] bool, both default True (reproduces prior behaviour
+    randers_attractive, randers_repulsive : [OURS 2026-08-24] bool, both default True (reproduces prior behaviour
         exactly). INDEPENDENT Randers-vs-Euclidean switches for the main
         force's attractive and repulsive terms respectively (Section 5's
         attr_coeff and rep_coeff) -- separate from use_drift, which
@@ -614,11 +609,11 @@ def randers_umap_fit(
         drift's effect entirely inside gravity, with the main UMAP layout
         forces staying plain Euclidean.
 
-    randers_gravity : [OURS 2026-08-24, per explicit user request] bool,
+    randers_gravity : [OURS 2026-08-24] bool,
         default False (reproduces prior gravity behaviour exactly -- the
         plain linear gamma*M[i]*b_i term this project has used since
-        2026-08-06/17). Only relevant when use_gravity=True. Per explicit
-        user choice, "Randers" here means: treat i's own virtual target
+        2026-08-06/17). Only relevant when use_gravity=True. Here, "Randers"
+        means: treat i's own virtual target
         xi_i = y_i + b_i as a pseudo-edge and run it through the EXACT
         SAME rho/g construction and attr_coeff curve as the main force
         above (Section 5), rather than gravity's original ad-hoc linear
@@ -657,9 +652,8 @@ def randers_umap_fit(
         -- ignored when B_fixed is given (that mechanism is already fully
         frozen, magnitude included).
 
-    scale_B_fixed_by_knn_distance : [OURS 2026-08-25, per explicit user
-        bool, default False (no-op, exact
-        prior behaviour). Only relevant when B_fixed is given. If True:
+    scale_B_fixed_by_knn_distance : [OURS 2026-08-25] bool, default False
+        (no-op, exact prior behaviour). Only relevant when B_fixed is given. If True:
         B_fixed's DIRECTION is frozen (computed once, before the loop,
         exactly as before), but its MAGNITUDE is replaced every epoch
         with node i's distance to its own k-th nearest neighbour in the
@@ -674,7 +668,7 @@ def randers_umap_fit(
         with drift_magnitude_target (that only applies to the
         use_drift/B_fixed=None path).
 
-    use_virtual_neighbor : [OURS 2026-08-20, per explicit user request] bool,
+    use_virtual_neighbor : [OURS 2026-08-20] bool,
         default False. A DIFFERENT mechanism from use_gravity, not a
         variant of it -- both may be independently enabled, though they are
         not expected to be combined in practice. Each node i's own virtual
@@ -688,7 +682,7 @@ def randers_umap_fit(
         gravity_neighbor_weight's smooth w_i in (0,1] -- here the
         equivalent weight is always exactly 1, i.e. mu_virtual=1.0 for
         every node, every epoch, matching how force_edges already forces
-        mu[i,j]=1.0 for a guaranteed edge elsewhere in this project):
+        A[i,j]=1.0 for a guaranteed edge elsewhere in this project):
 
             rho_v_i       = ||b_i||
             attr_coeff_v  = (2*a*b_param*rho_v^(2*b_param-1)) / (1 + a*rho_v^(2*b_param))
@@ -727,20 +721,29 @@ def randers_umap_fit(
 
     Returns
     -------
-    dict: Y, Y_init, B (final drift, zeros if use_drift=False), mu,
-          knn_mask, a, b_param, history (list of mean |rho-mu-implied-d|
-          per epoch, for a rough convergence trace)
+    dict: Y, Y_init, B (final drift, zeros if use_drift=False), mu
+          (the directed membership actually used by the force computation,
+          same as mu_directed -- kept as a duplicate key for backward
+          compatibility), mu_directed, knn_mask, a, b_param, history (list
+          of mean |rho-mu-implied-d| per epoch, for a rough convergence
+          trace)
     """
     D_asym = np.asarray(D_asym, dtype=np.float64)
     n = D_asym.shape[0]
     rng = np.random.default_rng(seed)
 
-    mu, knn_mask = fuzzy_simplicial_set(D_asym, n_neighbors)
+    # [OURS 2026-09-02] A = directed/asymmetric membership, used by the force
+    # computation below (attr_coeff/rep_coeff weighting) -- consistent with
+    # rho_r's own asymmetry. [OURS 2026-09-03] No separate symmetrized
+    # version anymore -- see fuzzy_simplicial_set's own docstring.
+    A, knn_mask = fuzzy_simplicial_set(D_asym, n_neighbors)
     if force_edges is not None and len(force_edges) > 0:
         fi, fj = np.asarray(force_edges)[:, 0], np.asarray(force_edges)[:, 1]
-        mu[fi, fj] = 1.0
-        mu[fj, fi] = 1.0
-        np.fill_diagonal(mu, 0.0)
+        # A: one-directional is correct here -- force_edges is i's own
+        # individual constraint ("j is a guaranteed neighbour of i"), it
+        # does not need to imply the reverse.
+        A[fi, fj] = 1.0
+        np.fill_diagonal(A, 0.0)
     a, b_param = find_ab_params(spread=spread, min_dist=min_dist)
     # [OURS 2026-08-10] norm_mode -- how N's raw units get removed before
     # it drives the drift sum. Ported from isomap_randers_umap.py (see
@@ -791,14 +794,18 @@ def randers_umap_fit(
     if Y_init_override is not None:
         Y = np.asarray(Y_init_override, dtype=np.float64).copy()
     else:
-        Y = spectral_layout(mu, d, seed=seed)
+        # [OURS 2026-09-03] classical_mds, not spectral_layout (removed
+        # project-wide -- see that function's own docstring). classical_mds
+        # is inf-safe (sanitizes any unreachable pairs internally), so this
+        # works whether D_asym is dense/complete or has np.inf entries.
+        Y = classical_mds(D_asym, d, seed=seed)
     Y_init = Y.copy()
 
     B = np.zeros((n, d)) if B_fixed is None else np.asarray(B_fixed, dtype=np.float64).copy()
     M = np.ones(n) if node_mass is None else np.asarray(node_mass, dtype=np.float64)
     eps = 1e-8
 
-    # [OURS 2026-08-25, per explicit user request] precompute B_fixed's own
+    # [OURS 2026-08-25] precompute B_fixed's own
     # FIXED unit direction once, outside the loop -- only its magnitude gets
     # replaced every epoch when scale_B_fixed_by_knn_distance=True, the
     # direction itself is exactly as located, never touched again.
@@ -813,7 +820,7 @@ def randers_umap_fit(
     # training trajectory (init -> ... -> final) can be plotted side by
     # side. epoch 0 entry is Y_init itself (pre-training).
     #
-    # [FIX 2026-08-19, per explicit user request] When B_fixed is None and
+    # [FIX 2026-08-19] When B_fixed is None and
     # use_drift=True (the "live" mechanism, B recomputed every epoch from
     # N=D_asym's own asymmetry and the current Y), B here is still the
     # np.zeros((n,d)) placeholder from line 520 -- the real B doesn't exist
@@ -845,8 +852,7 @@ def randers_umap_fit(
             np.fill_diagonal(d_self_excl0, np.inf)
             nearest_k0 = np.partition(d_self_excl0, k_local0 - 1, axis=1)[:, :k_local0]
             kth_dist0 = nearest_k0.max(axis=1)
-            # [OURS 2026-08-27, per explicit user request -- "driftin boyunu
-            # o k. neighbour'in boyuna bolucez"] magnitude = ||B_fixed|| /
+            # [OURS 2026-08-27] magnitude = ||B_fixed|| /
             # kth_dist (DIVIDE by the live k-th-nn distance), not kth_dist
             # itself. See the training-loop comment below for the full
             # rationale; mirrored here only so the epoch-0 snapshot shows the
@@ -914,14 +920,11 @@ def randers_umap_fit(
                 np.fill_diagonal(d_self_excl, np.inf)
                 nearest_k = np.partition(d_self_excl, k_local - 1, axis=1)[:, :k_local]
                 kth_dist = nearest_k.max(axis=1)
-                # [OURS 2026-08-27, per explicit user request -- "su an k.
-                # en yakin neighbour'in boyuna esitliyorsun ya driftin
-                # boyunu o k. neighbour'in boyuna bolucez boyle daha
-                # mantikli oluyor sanki"] magnitude = ||B_fixed|| / kth_dist
+                # [OURS 2026-08-27] magnitude = ||B_fixed|| / kth_dist
                 # (DIVIDE the frozen located magnitude by the live k-th-nn
                 # distance), replacing the previous "magnitude = kth_dist"
-                # rule entirely (not kept as a separate flag, per explicit
-                # user request). Direction (B_fixed_direction) is untouched,
+                # rule entirely (not kept as a separate flag). Direction
+                # (B_fixed_direction) is untouched,
                 # exactly as located, same as before.
                 #
                 # Why this is better bounded than the old rule: ||B_fixed||
@@ -946,7 +949,7 @@ def randers_umap_fit(
                                           magnitude_target=drift_magnitude_target)
         # else: use_drift=False -> B stays all-zeros -> rho=d, g=e -> vanilla UMAP
 
-        # [OURS 2026-08-24, per explicit user request] independent
+        # [OURS 2026-08-24] independent
         # Randers/Euclidean choice for attraction vs repulsion -- two
         # (rho, g) pairs, attr_coeff and rep_coeff each pick their own.
         raw_dot = (B[:, np.newaxis, :] * diff).sum(-1)        # b_i . (y_j-y_i)
@@ -967,13 +970,17 @@ def randers_umap_fit(
             if negative_sampling:
                 # [OURS 2026-08-31] repulsion handled by the sampled block
                 # after step=force.sum(axis=1) below -- attraction only here.
-                force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr
+                # [OURS 2026-09-02] A (directed), not mu_sym -- see A's own
+                # docstring in fuzzy_simplicial_set for why.
+                force = (A * attr_coeff)[:, :, np.newaxis] * g_attr
             else:
                 rho2b_rep = rho_rep ** (2 * b_param)
                 rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
 
-                force = (mu * attr_coeff)[:, :, np.newaxis] * g_attr \
-                        - rep_scale * ((1.0 - mu) * rep_coeff)[:, :, np.newaxis] * g_rep
+                # [OURS 2026-09-02] A (directed), not mu_sym -- see A's own
+                # docstring in fuzzy_simplicial_set for why.
+                force = (A * attr_coeff)[:, :, np.newaxis] * g_attr \
+                        - rep_scale * ((1.0 - A) * rep_coeff)[:, :, np.newaxis] * g_rep
         else:  # force_model == "fr_gravity"
             # [OURS 2026-08-28] Bannister et al. Section 2 / hypergz
             # our_layout.py's own baseline forces -- see force_model's
@@ -998,8 +1005,7 @@ def randers_umap_fit(
 
         step = force.sum(axis=1)                              # (n,d) net force on y_i
 
-        # [OURS 2026-08-31, per explicit user request -- "negative sampling
-        # fikrini uygulayabilir miyiz" / "FR'a da uygulayalım"] TRUE
+        # [OURS 2026-08-31] TRUE
         # stochastic negative sampling, active for BOTH force_model values
         # when negative_sampling=True -- draws n_negative_samples random
         # points PER NODE, fresh every epoch, and sums repulsion over only
@@ -1055,7 +1061,7 @@ def randers_umap_fit(
                 fr_neg_scale = (n - 1) / n_negative_samples
                 step = step - fr_neg_scale * (rep_coeff_neg_fr[:, :, np.newaxis] * g_neg).sum(axis=1)
 
-        # [OURS 2026-08-06, reworked 2026-08-17 per explicit user request]
+        # [OURS 2026-08-06, reworked 2026-08-17]
         # per-node gravity -- separate additive force, ported from
         # finsler_mds.py's gravity experiment (Gravity_Report.tex). Pulls y_i
         # toward xi_i = y_i + b_i; since xi_i - y_i = b_i by construction,
@@ -1082,7 +1088,7 @@ def randers_umap_fit(
                 w_grav = np.ones(n)
 
             if randers_gravity:
-                # [OURS 2026-08-24, per explicit user request] run gravity's
+                # [OURS 2026-08-24] run gravity's
                 # pseudo-edge (i, xi_i=y_i+b_i) through the EXACT SAME
                 # rho/g/attr_coeff construction as the main force above,
                 # instead of a plain linear pull. diff_v=b_i by construction.
@@ -1102,7 +1108,7 @@ def randers_umap_fit(
 
             step = step + gravity_strength * w_grav[:, np.newaxis] * M[:, np.newaxis] * gravity_term
 
-        # [OURS 2026-08-20, per explicit user request] virtual-neighbor --
+        # [OURS 2026-08-20] virtual-neighbor --
         # each node's own xi_i = y_i + b_i is an UNCONDITIONAL (k+1)-th
         # attractive neighbour (mu_virtual=1.0 always, no plausibility
         # gating), pulled with UMAP's OWN attraction curve instead of
@@ -1160,7 +1166,13 @@ def randers_umap_fit(
         snapshots.append({"epoch": n_epochs, "Y": Y.copy(), "B": B.copy()})
 
     result = {
-        "Y": Y, "Y_init": Y_init, "B": B, "mu": mu, "knn_mask": knn_mask,
+        # [OURS 2026-09-03] "mu" and "mu_directed" are now the same array
+        # (A, the directed membership) -- "mu" kept only for backward
+        # compatibility with any caller/plotting code still reading that
+        # key; there is no separate symmetric graph anymore (see
+        # fuzzy_simplicial_set's own docstring for why).
+        "Y": Y, "Y_init": Y_init, "B": B, "mu": A, "mu_directed": A,
+        "knn_mask": knn_mask,
         "N": N, "a": a, "b_param": b_param, "history": history,
     }
     if snapshot_every is not None:

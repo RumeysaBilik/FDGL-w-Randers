@@ -4,8 +4,7 @@ run_mammoth.py -- Randers-UMAP on the mammoth point cloud (mammoth.csv) +
 a hand-crafted Randers field, using the EXACT SAME pipeline as
 run_swiss_roll.py (run_located_drift, imported directly, not duplicated).
 
-[OURS 2026-08-16, per explicit user request -- "sadece data setini
-değiştirelim"] Only the dataset changes here: mammoth.csv (~1M raw points,
+[OURS 2026-08-16] Only the dataset changes here: mammoth.csv (~1M raw points,
 subsampled) instead of the synthetic swiss roll. Everything downstream
 (D_asym construction via randers_bridge.compute_dist_matrix, the locate-
 then-attach B mechanism, the apply-step force-directed training) is
@@ -16,7 +15,7 @@ Randers field on mammoth
 mammoth.csv has no natural parametrisation (unlike the swiss roll's t),
 and neither the IsUMap paper nor DAGES's own paper/code define a drift
 field for this dataset -- there's no ground truth to replicate here.
-Per explicit user choice (of 3 options presented), we hand-craft a
+We hand-craft a
 DAGES-style global-axis field, the same spirit as their river/sea examples
 in main_2D_maps.py (a fixed flow direction, magnitude shaped by position,
 NOT derived from local manifold geometry):
@@ -116,26 +115,28 @@ def main():
     p.add_argument("--ramp", action="store_true")
     p.add_argument("--init-only", action="store_true")
     p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
-                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18 per explicit "
-                         "user request] locate step's placement method. 'isomap' (default) = "
-                         "classical_mds (Isomap's own finishing step). 'umap' = "
-                         "fuzzy_simplicial_set+spectral_layout.")
+                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18] locate "
+                         "step's placement method. 'isomap' (default) = "
+                         "classical_mds (Isomap's own finishing step). 'umap' is kept for "
+                         "backward CLI compat but is now IDENTICAL to 'isomap' -- "
+                         "spectral_layout was removed project-wide (see "
+                         "randers_umap.classical_mds's own docstring).")
     p.add_argument("--alpha", type=float, default=0.5, help="max ||omega|| for the mammoth drift field")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for the locate step's placement AND the apply "
                          "step's force-directed training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="[OURS 2026-08-20, per explicit user request] how "
+                    help="[OURS 2026-08-20] how "
                          "compute_dist_matrix builds its base adjacency graph -- see "
                          "run_swiss_roll.py's --adjacency help / randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation. 'threshold' (default) = unchanged. 'knn' = TRUE "
                          "per-point k-nearest-neighbours membership, asymmetric in general.")
     p.add_argument("--normalize", action="store_true",
-                    help="[OURS 2026-08-25, per explicit user request] default OFF -- "
+                    help="[OURS 2026-08-25] default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
@@ -182,7 +183,7 @@ def main():
     if not args.quiet:
         print(f"wrote {args.out}_3d_field.png")
 
-    # [OURS 2026-08-19, per explicit user request] 3D plot of the initial
+    # [OURS 2026-08-19] 3D plot of the initial
     # data with the drift ATTACHED -- i.e. the "virtual" cloud X+omega,
     # the actual point each x_i's drift vector points to (same X_virtual
     # concept used everywhere else in this project, e.g. the old
@@ -193,8 +194,7 @@ def main():
     # for this visualisation, so the two plots agree on what "the arrows"
     # mean. This does NOT touch the true omega used anywhere downstream
     # (locate step, D_asym, etc.) -- display-only.
-    # [OURS 2026-08-19, per explicit user request -- "direkt driftleri kırmızı
-    # ok olarak çizsin"] drawn as crimson quiver arrows FROM each x_i TO its
+    # [OURS 2026-08-19] drawn as crimson quiver arrows FROM each x_i TO its
     # attached virtual point x_i+omega_i, same subsample/style as the field
     # plot above, rather than (or in addition to) two overlaid clouds.
     X_virtual_display = X + omega * scale3d
@@ -232,7 +232,7 @@ def main():
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
@@ -247,8 +247,7 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20, per explicit user request -- "finslermds'in swiss
-        # rollda haliyle yaptığı gibi eksene oturt"] matplotlib's DEFAULT 3D
+        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
         # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
         # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")

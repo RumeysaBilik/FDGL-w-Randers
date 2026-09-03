@@ -47,7 +47,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from randers_bridge import compute_dist_matrix, asymmetry_score, run_located_drift
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, spectral_layout, classical_mds
+from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds
 
 
 def make_swiss_roll_randers(n, seed=42):
@@ -89,9 +89,7 @@ def make_swiss_roll_randers(n, seed=42):
     return X, omega, t
 
 
-# [OURS 2026-08-28, per explicit user request -- "run_located_drift
-# fonksiyonunu randers_bridge'e tasimak istiyorum, butun diger runladigimiz
-# dosyalar oradan ceksin"] run_located_drift() used to be defined here --
+# [OURS 2026-08-28] run_located_drift() used to be defined here --
 # it now lives in randers_bridge.py (imported above), which is the natural
 # home since the function's job (X, omega -> D_asym -> embedding) is
 # exactly what that module is for. Every other run_*.py/test.py/
@@ -123,8 +121,7 @@ def main():
                          "(revert to the old unconditional gravity pull). Only matters with "
                          "--gravity.")
     p.add_argument("--no-virtual-neighbor", action="store_true",
-                    help="[OURS 2026-08-20, per explicit user request -- default changed to ON "
-                         "the same day] by default, each node's own virtual point "
+                    help="[OURS 2026-08-20] by default, each node's own virtual point "
                          "xi_i=y_i+b_i is treated as an UNCONDITIONAL (k+1)-th attractive "
                          "neighbour every epoch (mu_virtual=1.0 always, no plausibility "
                          "gating), pulled with UMAP's OWN attraction curve (same attr_coeff "
@@ -148,20 +145,21 @@ def main():
                          "(B_located). Ignores --epochs, --ramp, --gravity, "
                          "--snapshot-every (there's no training loop to snapshot).")
     p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
-                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18 per explicit "
-                         "user request] locate step's placement method. 'isomap' (default) = "
+                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18] locate "
+                         "step's placement method. 'isomap' (default) = "
                          "classical_mds (Isomap's own finishing step) -- makes the whole pipeline "
-                         "consistently Isomap-style, not just the distance construction. 'umap' = "
-                         "fuzzy_simplicial_set+spectral_layout.")
+                         "consistently Isomap-style, not just the distance construction. 'umap' "
+                         "is kept for backward CLI compat but is now IDENTICAL to 'isomap' -- "
+                         "spectral_layout was removed project-wide.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for the locate step's placement AND the apply "
                          "step's force-directed training (mirrors FinslerMDS's "
                          "--proj-dim). 2 (default) = existing 2D pipeline, unchanged. "
                          "3 = full 3D layout; the main scatter plot switches to a 3D "
                          "axes with 3D drift-arrow quivers automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="[OURS 2026-08-20, per explicit user request] how "
+                    help="[OURS 2026-08-20] how "
                          "compute_dist_matrix builds its base adjacency graph. "
                          "'threshold' (default, unchanged) = lwileczek/isomap-style "
                          "eps-threshold rule, symmetric by construction. 'knn' = TRUE "
@@ -171,7 +169,7 @@ def main():
                          "explanation, including why 'knn' reintroduces a second, "
                          "topology-driven source of asymmetry alongside the Randers term.")
     p.add_argument("--normalize", action="store_true",
-                    help="[OURS 2026-08-25, per explicit user request] default OFF -- "
+                    help="[OURS 2026-08-25] default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
@@ -179,7 +177,7 @@ def main():
                          "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28, per explicit user request] which attraction/"
+                    help="[OURS 2026-08-28] which attraction/"
                          "repulsion LAW drives the force-directed layout. 'fr_gravity' "
                          "(NEW DEFAULT) = Bannister et al.'s own Fruchterman-Reingold-"
                          "style forces (arXiv:1209.0748 Section 2, cross-checked against "
@@ -192,7 +190,7 @@ def main():
                     help="natural edge length for --force-model fr_gravity. None "
                          "(default) uses the paper's own sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-08-31, per explicit user request] only has an "
+                    help="[OURS 2026-08-31] only has an "
                          "effect with --force-model umap (fr_gravity never used "
                          "negative sampling to begin with). Default OFF -- repulsion "
                          "is the dense sum over every non-neighbour, rescaled to match "
@@ -248,7 +246,7 @@ def main():
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver (same pattern already used above for the ambient field
     # plot); proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
@@ -299,7 +297,7 @@ def main():
         vmin, vmax = t.min(), t.max()
         sc2 = None
 
-        # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> build
+        # [OURS 2026-08-20] proj_dim==3 -> build
         # the grid with per-cell 3D axes (plt.subplots can't hand out mixed
         # 2D/3D axes, so we use add_subplot per cell instead).
         if args.proj_dim == 3:

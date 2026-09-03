@@ -3,17 +3,15 @@
 run_mammoth_isumap.py -- isumap-derived D_asym + live-derived drift, on the
 mammoth point cloud. EXACT SAME pipeline as run_swiss_roll_isumap.py
 (build_isumap_dist_matrix imported directly, not duplicated) -- only the
-dataset changes, per explicit user request ("sadece data setini
-değiştirelim").
+dataset changes.
 
 See run_mammoth.py's module docstring for the mammoth Randers-field
 rationale (hand-crafted global-axis field, DAGES river/sea style -- no
 paper precedent exists for this dataset, neither IsUMap's nor DAGES's).
 
-[OURS 2026-08-18, per explicit user/advisor feedback, then reconciled per a
-second explicit user request -- see run_swiss_roll_isumap.py's module
-docstring for the full rationale, especially locate_B_from_D_asym()'s
-docstring] B is no longer located via virtual points that peeked at the
+[OURS 2026-08-18 -- see run_swiss_roll_isumap.py's module docstring for the
+full rationale, especially locate_B_from_D_asym()'s docstring] B is no
+longer located via virtual points that peeked at the
 mammoth's true omega field. Instead, B originates ENTIRELY from D_asym's
 own asymmetry (compute_drift on N = (D_asym-D_asym.T)/(D_asym+D_asym.T),
 no omega anywhere in that formula), but -- unlike a first attempt at this
@@ -47,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from run_mammoth import make_mammoth_randers
-from run_swiss_roll_isumap import build_isumap_dist_matrix, locate_B_from_D_asym
+from run_swiss_roll_isumap import build_isumap_dist_matrix, locate_B_from_D_asym, isumap_style_init
 from randers_umap import randers_umap_fit
 
 
@@ -76,13 +74,13 @@ def main():
     p.add_argument("--snapshot-every", type=int, default=None)
     p.add_argument("--alpha", type=float, default=0.5, help="max ||omega|| for the mammoth drift field")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20, per explicit user request] embedding "
+                    help="[OURS 2026-08-20] embedding "
                          "dimension for randers_umap_fit's own internal spectral "
                          "init AND the apply-step training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28, per explicit user request] see run_swiss_roll.py's "
+                    help="[OURS 2026-08-28] see run_swiss_roll.py's "
                          "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
                          "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -114,18 +112,23 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
-    # [OURS 2026-08-19, per explicit user request -- reverted back to the
-    # live mechanism, see run_swiss_roll_isumap.py's module docstring for
-    # the full back-and-forth] B is derived live, every epoch, purely from
+    # [OURS 2026-08-19] B is derived live, every epoch, purely from
     # D_asym's own asymmetry, no omega. --init-only still shows a
     # meaningful epoch-0 drift thanks to the 2026-08-19 fix in
     # randers_umap.py's snapshot capture (computes the real epoch-0
     # compute_drift(...) value instead of an all-zero placeholder).
+    # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
+    # run_swiss_roll_isumap.py's isumap_style_init docstring), NOT
+    # randers_umap_fit's internal UMAP-style spectral_layout default.
+    if not args.quiet:
+        print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
+    Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
+
     if not args.quiet:
         print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
     out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                             n_epochs=apply_epochs, use_drift=True, B_fixed=None,
-                            d=args.proj_dim,
+                            d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,
                             use_gravity=args.gravity, gravity_strength=args.gravity_strength,
                             gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
@@ -141,7 +144,7 @@ def main():
         Y, B = out["Y"], out["B"]
 
     # ---- plot --------------------------------------------------------
-    # [OURS 2026-08-20, per explicit user request] proj_dim==3 -> 3D scatter
+    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
@@ -156,8 +159,7 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20, per explicit user request -- "finslermds'in swiss
-        # rollda haliyle yaptığı gibi eksene oturt"] matplotlib's DEFAULT 3D
+        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
         # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
         # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")

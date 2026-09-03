@@ -1,10 +1,7 @@
 """
 drift_magnitude_test.py -- per-epoch drift-magnitude monitor / sanity check.
 
-[OURS 2026-08-27, per explicit user request -- "sence her epochta driftlerin
-boyunu olcen bir test ve kontrol mekanizmasi kurabilir miyiz kodumuza ek bi
-dosyada"; generalised across datasets 2026-08-28 per "bunu sadece swiss roll
-icin degil de her data seti icin uygulanabilir hale getirir misin"]
+[OURS 2026-08-27]
 Standalone diagnostic (does not modify randers_umap.py, run_swiss_roll.py,
 run_mammoth.py, run_sphere_radial.py, run_sphere_tangential.py, or test.py)
 that tracks ||b_i|| epoch by epoch during training and checks it against the

@@ -107,6 +107,19 @@ def main():
                          "randers_umap_fit's own internal default (ramp=True) would otherwise "
                          "apply silently -- passing ramp=args.ramp here makes it explicit and "
                          "off by default, consistent with the other run_*.py scripts.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                         "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
+                         "law, 'umap' = UMAP's own fitted (a,b)-curve. Was previously only "
+                         "exposed on the swiss_roll/mammoth/sphere/isumap scripts, not here.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
+                         "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
+                         "(n_negative_samples random points per node, drawn fresh every epoch) "
+                         "instead of the dense/exact sum. See randers_umap_fit's own "
+                         "negative_sampling docstring for the exact mechanism and rescaling.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_pca_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -125,7 +138,7 @@ def main():
         print(f"X: {X.shape}  (raw pixel dimension = {X.shape[1]})")
 
     # ---- PCA: 784 -> --pca-dim, BEFORE IsUMap ever sees the data ----------
-    # [OURS 2026-08-26, per explicit user request -- advisor's "option 2"]
+    # [OURS 2026-08-26]
     # this is the ONLY structural difference from asymm_dist_MNIST.py: the
     # rest of the pipeline (IsUMap's own distance_graph_generation, then our
     # own randers_umap_fit) is byte-for-byte the same mechanism, just fed
@@ -147,8 +160,7 @@ def main():
 
     n = X_pca.shape[0]
 
-    # [OURS 2026-08-26, per explicit user request -- bug found while
-    # diagnosing a structureless embedding] R's key (i,j,k) means "distance
+    # [OURS 2026-08-26] R's key (i,j,k) means "distance
     # from j to k, as measured in neighbourhood i" (distance_graph_
     # generation.py's own comp_graph(), line ~147). The DIRECT, real
     # measured distance from point i to one of its own neighbours only
@@ -215,6 +227,8 @@ def main():
                                 gravity_strength=args.gravity_strength,
                                 gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
                                 ramp=args.ramp,
+                                force_model=args.force_model, fr_k=args.fr_k,
+                                negative_sampling=args.neg_sampling,
                                 seed=args.seed, verbose=verbose)
     Y, B = out["Y"], out["B"]
 
@@ -244,7 +258,7 @@ def main():
         print(f"\nwrote {out_path} and {args.out}.npz (in {save_dir})")
 
     # ---- snapshot grid: init -> every N epochs -> final, side by side -----
-    # [OURS 2026-08-26, per explicit user request -- "sureci gormek istiyorum"]
+    # [OURS 2026-08-26]
     # same mechanism as run_swiss_roll.py's own --snapshot-every.
     if args.snapshot_every is not None:
         snaps = out["snapshots"]

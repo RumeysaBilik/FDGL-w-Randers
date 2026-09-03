@@ -9,8 +9,7 @@ model, "CRCC_AKPE_scRNASeq_2024", from
 https://github.com/LUK4S-B/IsUMap/tree/main/Dataset_files/
 scRNA_dataset-1_CRCC_AKPE_scRNASeq_2024).
 
-[OURS 2026-08-28, per explicit user request -- "bu data setini methodumuza
-uygulayabilir miyiz"]
+[OURS 2026-08-28]
 
 Dataset
 -------
@@ -155,6 +154,16 @@ def main():
                     help="ramp drift's magnitude 0->1 over epochs instead of applying it "
                          "at full strength from epoch 0 (off by default, matching the "
                          "other run_*.py/embed_*.py scripts' own --ramp convention).")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                         "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
+                         "law, 'umap' = UMAP's own fitted (a,b)-curve.")
+    p.add_argument("--fr-k", type=float, default=None,
+                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
+                         "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
+    p.add_argument("--neg-sampling", action="store_true",
+                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
+                         "instead of the dense/exact sum.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="scrna_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -249,6 +258,8 @@ def main():
                                 gravity_strength=args.gravity_strength,
                                 gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
                                 ramp=args.ramp,
+                                force_model=args.force_model, fr_k=args.fr_k,
+                                negative_sampling=args.neg_sampling,
                                 seed=args.seed, verbose=verbose)
     Y, B = out["Y"], out["B"]
 

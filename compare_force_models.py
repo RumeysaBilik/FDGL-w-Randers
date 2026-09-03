@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-compare_force_models.py -- [OURS 2026-08-31, per explicit user request --
-"bu paperın methodu ve UMAP'in methodunun neden bu kadar farklı sonuçlar
-verdiklerini güzelce analiz etmek istiyorum"] quantifies WHY
+compare_force_models.py -- [OURS 2026-08-31] quantifies WHY
 force_model="fr_gravity" (Bannister et al./Fruchterman-Reingold, the new
 default) and force_model="umap" (the original (a,b)-curve law) produce such
 different embeddings, on the SAME D_asym / same everything-else, differing
@@ -28,8 +26,7 @@ Two datasets, two different kinds of evidence:
 Metrics
 -------
 common (both datasets):
-  - asymmetry_score [OURS 2026-08-31, per explicit user request --
-    "spearmani cikarip asimetri skor ekler misin"] ported from
+  - asymmetry_score [OURS 2026-08-31] ported from
     randers_bridge.asymmetry_score(D, bln): for each real graph edge
     (i,j), |D[i,j]-D[j,i]| / (D[i,j]+D[j,i]), in [0,1), then averaged.
     Computed TWICE: once on the raw D_asym itself (the "target" asymmetry
@@ -87,7 +84,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from randers_bridge import compute_dist_matrix, asymmetry_score
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set
+from randers_umap import randers_umap_fit
 
 
 # ─────────────────────────────────────────────────────────────────────────
