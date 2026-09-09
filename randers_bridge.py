@@ -223,27 +223,33 @@ def compute_dist_matrix(
 
 def asymmetry_score(D, bln):
     """
-    [OURS 2026-08-24]
-    Per-node, then global, control metric for how much of a distance matrix's
-    magnitude is asymmetric (direction-dependent) vs symmetric, restricted to
-    each point's DIRECT graph neighbours (bln) -- NOT all n-1 pairs, since
-    D (e.g. D_asym from compute_dist_matrix) is dense: every pair is finite
-    once the graph is connected, so without bln you'd be averaging over
-    shortest-path-reachable pairs that were never actually adjacent edges.
+    [OURS 2026-08-24, denominator removed 2026-09-05]
+    Per-node, then global, control metric for how much a distance matrix's
+    two directions disagree, restricted to each point's DIRECT graph
+    neighbours (bln) -- NOT all n-1 pairs, since D (e.g. D_asym from
+    compute_dist_matrix) is dense: every pair is finite once the graph is
+    connected, so without bln you'd be averaging over shortest-path-reachable
+    pairs that were never actually adjacent edges.
 
     For each node i and each of its direct neighbours j (bln[i, j] True,
     i != j):
         asymm_ij = abs(D[i, j] - D[j, i])
-        ratio_ij = asymm_ij / (D[i, j] + D[j, i])
 
-    [OURS 2026-08-24]
-    ratio_ij is in [0, 1): 0 = this edge is perfectly symmetric
-    (D[i,j]==D[j,i]); approaches 1 only in the extreme case where one
-    direction's distance collapses to ~0 relative to the other (never
-    exactly reaches 1 unless one direction is exactly 0). This is the
-    earlier asymm_ij/symm_ij formula (symm_ij=(D[i,j]+D[j,i])/2) divided by
-    2 -- same relative, scale-free ratio, just rescaled to land in [0,1]
-    instead of [0,2) so it reads like a normalised "how asymmetric" score.
+    [OURS 2026-09-05] This used to be a RATIO, asymm_ij / (D[i,j]+D[j,i]),
+    normalising away the pair's own scale so the score read as a
+    dimensionless "how asymmetric" fraction in [0, 1). That denominator is
+    now removed: per_node/global_score are the RAW asymmetric part
+    abs(D[i,j]-D[j,i]) itself (mean over neighbours, then over nodes), in
+    D's own units -- no longer bounded in [0,1), and no longer scale-free
+    across datasets with different overall distance magnitudes. This is a
+    deliberate choice to see the asymmetry directly rather than through a
+    normalisation that could shrink/inflate it relative to the pair's own
+    (possibly very small or very large) combined distance. Nothing else
+    about this function's callers needs to change: initial-vs-final RATIOS
+    (e.g. 100*final/initial "%% preserved" prints) are still meaningful,
+    since both sides of that ratio now use the same unnormalised formula --
+    only the ABSOLUTE numbers reported/plotted change scale, not their
+    relative comparison.
 
     Same function works on ANY (n, n) distance matrix + neighbour mask -- call
     it on the input D_asym (the Randers field's own, "target" asymmetry) and,
@@ -263,9 +269,10 @@ def asymmetry_score(D, bln):
 
     Returns
     -------
-    per_node : (n,) ndarray -- mean ratio_ij over j in neighbours(i);
-               np.nan for any node with zero direct neighbours (shouldn't
-               happen for a connected graph with n_neighbors>=1, but guarded)
+    per_node : (n,) ndarray -- mean abs(D[i,j]-D[j,i]) over j in
+               neighbours(i), in D's own units; np.nan for any node with
+               zero direct neighbours (shouldn't happen for a connected
+               graph with n_neighbors>=1, but guarded)
     global_score : float -- mean of per_node over all nodes (nanmean, so any
                isolated node doesn't skew/crash the average)
     """
@@ -277,8 +284,7 @@ def asymmetry_score(D, bln):
         if len(js) == 0:
             continue
         asymm = np.abs(D[i, js] - D[js, i])
-        denom = np.maximum(D[i, js] + D[js, i], 1e-12)  # avoid /0 for coincident points
-        per_node[i] = np.mean(asymm / denom)
+        per_node[i] = np.mean(asymm)
     global_score = float(np.nanmean(per_node))
     return per_node, global_score
 
@@ -357,7 +363,8 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
                       apply_step=True, init_method="isomap",
                       normalize_drift_by_asymmetry=False,
-                      force_model="fr_gravity", fr_k=None, negative_sampling=False):
+                      force_model="fr_gravity", fr_k=None, negative_sampling=False,
+                      randers_attractive=True, randers_repulsive=False):
     """
     [OURS 2026-08-28] Moved here verbatim
     from run_swiss_roll.py (where it was originally defined and where every
@@ -379,6 +386,15 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         below (locate step's D_sym_aug AND apply step's D_asym). See
         compute_dist_matrix's own adjacency docstring above for the full
         explanation of the difference.
+
+    randers_attractive, randers_repulsive : [OURS 2026-09-04] bool, forwarded
+        unchanged to randers_umap_fit's own same-named parameters (defaults
+        match randers_umap_fit's own: attractive=True, repulsive=False --
+        see its docstring for the full mechanics). D_geo (computed here,
+        below, from the same X/adjacency but randers_field=None) is always
+        forwarded too, so switching either flag to False gets a correctly
+        Euclidean-weighted force term instead of silently reusing the
+        Randers-derived A as that term's weight.
 
     proj_dim : [OURS 2026-08-20] int, default 2.
         Embedding dimension for BOTH the locate step's placement
@@ -505,6 +521,20 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                                     randers_field=omega, adjacency=adjacency,
                                     return_adjacency=True)
 
+    # [OURS 2026-09-04] D_geo -- the drift-free counterpart of D_asym (same
+    # topology, same shortest-path construction, randers_field=None instead
+    # of omega). Only used inside randers_umap_fit when randers_attractive=
+    # False or randers_repulsive=False (default: attractive=True,
+    # repulsive=False), so a force term whose distance is switched to plain
+    # Euclidean also gets a plain-Euclidean WEIGHT (A_geo), instead of
+    # silently reusing the Randers-derived A -- see randers_umap_fit's own
+    # randers_attractive/randers_repulsive docstring for the full
+    # rationale. Cheap relative to the training loop (one extra Dijkstra),
+    # computed unconditionally here so it's available regardless of what
+    # flags the caller passes through **kwargs below.
+    D_geo, _ = compute_dist_matrix(X, n_neighbors=k, path_method="auto",
+                                    randers_field=None, adjacency=adjacency)
+
     # [OURS 2026-08-24] control metric -- how much
     # of D_asym's magnitude, on average over each node's real graph
     # neighbours, is asymmetric (direction-dependent) vs symmetric. See
@@ -514,8 +544,8 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
     if verbose:
         print(f"asymmetry_score: global={asym_global:.4f}  "
-              f"(mean |d_ij-d_ji| / mean-dist, averaged over each node's real "
-              f"neighbours, then over all nodes -- 0 = fully symmetric)")
+              f"(mean |d_ij-d_ji|, in D_asym's own units, averaged over each "
+              f"node's real neighbours, then over all nodes -- 0 = fully symmetric)")
 
     # [OURS 2026-08-25] default
     # False = exact prior behaviour, B_located used as-is (frozen
@@ -539,7 +569,9 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                             scale_B_fixed_by_knn_distance=normalize_drift_by_asymmetry,
                             clip_delta=clip_delta, seed=seed, verbose=verbose,
                             force_model=force_model, fr_k=fr_k,
-                            negative_sampling=negative_sampling)
+                            negative_sampling=negative_sampling,
+                            D_geo=D_geo, randers_attractive=randers_attractive,
+                            randers_repulsive=randers_repulsive)
     Y, B = out2["Y"], out2["B"]
 
     # [OURS 2026-09-01] asymmetry_score computed a SECOND time, now on

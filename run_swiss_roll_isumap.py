@@ -38,7 +38,7 @@ The fix: stop locating B via virtual points entirely -- but ALSO don't swing
 all the way to recomputing B every epoch. An earlier, separately-agreed
 design principle (from a different discussion, well before the advisor
 feedback above) was that B should be computed ONCE and FROZEN, attached to
-each node for the whole apply-step training ("ai+bi, bi sabit": a_i moves
+each node for the whole apply-step training ("ai+bi, bi fixed": a_i moves
 every epoch, b_i does not) -- the same reasoning that motivated replacing
 the old locate_epochs-epoch trained locate step with a single deterministic
 spectral_layout call in the first place. A first attempt at fixing the
@@ -55,11 +55,6 @@ Y_init (the same untrained spectral_layout initialisation randers_umap_fit
 would build internally) -- not per epoch. The result is frozen and passed
 as B_fixed, exactly like the old virtual-point mechanism used to do, just
 sourced from D_asym's asymmetry instead of from omega.
-
-This script no longer imports anything from run_swiss_roll_svd_radar.py or
-svd_radar.py -- the SVD-of-Delta B variant is REMOVED entirely, and the
-virtual-point locate function (locate_B_isumap, formerly defined below) is
-now also removed rather than just unused.
 
 t and alpha(t) (ground truth) are still known for swiss roll, so
 test.py's direction_accuracy_swiss metric can still be run against this
@@ -89,146 +84,17 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from run_swiss_roll import make_swiss_roll_randers
-from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds, compute_drift
+from randers_umap import randers_umap_fit, arrow_scale
+from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
 
-
-def isumap_style_init(D_asym, d=2, seed=0):
-    """
-    [OURS 2026-09-03] Real IsUMap (github.com/LUK4S-B/IsUMap, src/isumap.py,
-    `initialization="cMDS"` default) initialises its embedding with
-    classical/Torgerson MDS, NOT a UMAP-style spectral (Laplacian-eigenmap)
-    layout -- confirmed directly against IsUMap's own source. The
-    "_isumap"-suffixed scripts in this project (run_swiss_roll_isumap.py,
-    run_mammoth_isumap.py, run_sphere_isumap.py) exist specifically to test
-    how IsUMap's own asymmetric D_asym behaves under our shared
-    force-directed machinery, so their init should match IsUMap's own choice
-    -- the ONLY thing actually borrowed from UMAP in these scripts should be
-    the attractive/repulsive force computation itself, not the init method.
-
-    classical_mds() requires a dense/complete distance matrix (it
-    double-centers whole rows/columns), but this project's own D_asym here
-    (build_isumap_dist_matrix's reconstruction of data_D, the raw
-    pre-t-conorm/pre-Dijkstra neighbourhood distances) is deliberately
-    SPARSE (np.inf outside each point's own ~k-NN row) -- see
-    build_isumap_dist_matrix's own docstring for why that raw, unmerged
-    matrix is what's used for the force computation and for extracting B's
-    asymmetry. So this helper builds a SEPARATE, directed-Dijkstra-completed
-    dense copy (same recipe as MNIST/embed_MNIST_raw.py's own D_asym
-    construction) purely to get a valid input for classical_mds -- it does
-    NOT replace the sparse D_asym fed to randers_umap_fit/fuzzy_simplicial_set
-    elsewhere, so the force computation and the drift/asymmetry extraction
-    are both completely unaffected by this change; only the starting
-    position Y_init changes.
-    """
-    n = D_asym.shape[0]
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.csgraph import shortest_path
-    rows, cols = np.nonzero(np.isfinite(D_asym) & (D_asym > 0))
-    nbg = csr_matrix((D_asym[rows, cols], (rows, cols)), shape=(n, n))
-    D_dense, _ = shortest_path(nbg, method="auto", directed=True, return_predecessors=True)
-
-    # [OURS 2026-09-03] a directed k-NN graph is not guaranteed strongly
-    # connected -- some (i,j) pairs can stay unreachable (inf) even after
-    # Dijkstra, especially at small n/k or for point clouds with thin
-    # regions (observed empirically on mammoth at n=150). classical_mds's
-    # double-centering (D**2, then J@D2@J) turns any remaining inf into nan
-    # across the WHOLE matrix (inf*0 / inf-inf during centering), not just
-    # the unreachable entries -- so this has to be resolved before calling
-    # it. Standard MDS practice: replace unreachable pairs with a large-but-
-    # finite fallback (here, the graph's own observed diameter), since "far
-    # apart" is a reasonable stand-in for "no directed path found" and keeps
-    # every entry finite without distorting the reachable geometry.
-    finite = np.isfinite(D_dense)
-    if not finite.all():
-        fallback = D_dense[finite].max() if finite.any() else 1.0
-        D_dense = np.where(finite, D_dense, fallback)
-        n_unreachable = int((~finite).sum())
-        print(f"isumap_style_init: {n_unreachable} directed pair(s) unreachable after "
-              f"Dijkstra -- filled with the graph's own max finite distance "
-              f"({fallback:.4f}) before classical_mds.")
-
-    return classical_mds(D_dense, d=d, seed=seed)
-
-
-def build_isumap_dist_matrix(X, k=30, verbose=True):
-    """Same recipe as asymm_dist_MNIST.py: pull data_D (isumap_dist[0]),
-    NOT D -- reconstruct the (i,j,k) dict into a dense (n,n) matrix.
-
-    [OURS 2026-08-07 bug fix] data_D only populates ~k entries per row
-    (the epm=True "pure star graph" default -- see distance_graph_generation.py
-    docstring). asymm_dist_MNIST.py's original reconstruction used
-    np.zeros(), leaving every UN-populated (i,j) pair at exactly 0.0 --
-    indistinguishable from a genuine zero distance. randers_umap.py's
-    _knn_from_distance_matrix() picks the k SMALLEST values per row via
-    argsort, so on a mostly-zero-filled row it was picking ~k phantom
-    "distance-0" non-edges as the nearest neighbours instead of the ~k
-    REAL populated ones (verified empirically: for k=20, all 20 selected
-    neighbours were phantom zeros, 0/20 real). Filling the unpopulated
-    entries with np.inf instead fixes this -- inf can never win an
-    argsort-smallest selection, and downstream smooth_knn_dist/mu
-    computations already handle inf gracefully (exp(-inf/sigma) = 0, so
-    an inf "neighbour" that leaks into the top-k for an under-populated
-    row just gets zero weight instead of corrupting the graph).
-    """
-    n = X.shape[0]
-    isumap_dist = distance_graph_generation(
-        X, k=k, normalize=True, distBeyondNN=True, verbose=verbose,
-        dataIsDistMatrix=False, dataIsGeodesicDistMatrix=False, saveDistMatrix=False,
-    )
-    data_D = isumap_dist[0]
-    D = np.full((n, n), np.inf)
-    np.fill_diagonal(D, 0.0)
-    for key, value in data_D.items():
-        i, j, k_ = key
-        D[i, j] = value
-    return D
-
-
-def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
-    """
-    [OURS 2026-08-18] B originates ENTIRELY from
-    D_asym's own asymmetry (no omega involved anywhere -- this is the
-    advisor-driven fix from earlier the same day: isumap's whole premise is
-    that drift can be inferred purely from an observed asymmetric
-    dissimilarity matrix), but is computed ONCE and FROZEN, then attached
-    to each node for the whole apply-step training (this is the earlier,
-    separately-agreed design principle -- "ai+bi, bi sabit": a_i moves every
-    epoch, b_i does not).
-
-    Mechanism: build Y_init exactly the way randers_umap_fit would build it
-    internally (spectral_layout on D_asym's own fuzzy graph, same emb_k and
-    seed -- so this call reproduces that Y_init deterministically, no
-    Y_init_override needed downstream), then call compute_drift() ONCE on
-    this Y_init (not per-epoch/live) to get B. Contrast with the (rejected)
-    live-B mechanism this replaces, which called compute_drift() every
-    epoch on the CURRENT, evolving Y -- this version calls it exactly once,
-    on the untrained initial layout, and freezes the result.
-    """
-    n = D_asym.shape[0]
-    # [OURS 2026-09-03] Y_init now built via isumap_style_init (real
-    # IsUMap's own cMDS choice), NOT spectral_layout -- see that helper's
-    # own docstring above for the full rationale (confirmed against
-    # IsUMap's actual GitHub source). fuzzy_simplicial_set is still called,
-    # only for knn_mask (compute_drift needs it below) -- A is discarded
-    # here, it doesn't feed Y_init anymore (no symmetrized counterpart
-    # exists to discard separately -- see fuzzy_simplicial_set's own
-    # docstring, spectral_layout has been removed project-wide).
-    _, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
-    Y_init = isumap_style_init(D_asym, d=2, seed=seed)
-
-    N = (D_asym - D_asym.T) / (D_asym + D_asym.T + 1e-12)
-    N = np.where(np.isfinite(N), N, 0.0)
-
-    B_located = compute_drift(N, knn_mask, emb_k, Y_init, clip_delta=clip_delta)
-
-    if verbose:
-        bn = np.linalg.norm(B_located, axis=1)
-        limit = 1.0 - clip_delta
-        print(f"B located (from D_asym asymmetry only, frozen): mean||b||={bn.mean():.4f}  "
-              f"max||b||={bn.max():.4f}  clipped={(bn >= limit - 1e-9).sum()}/{n}")
-
-    return B_located
+# [OURS 2026-09-08] locate_B_from_D_asym() (the frozen-B alternative to the
+# live mechanism main() actually runs) removed -- confirmed dead code, never
+# called anywhere in this file, run_mammoth_isumap.py, run_sphere_isumap.py,
+# or asymmetry_k_sweep_isumap.py (only imported by run_mammoth_isumap.py,
+# itself never invoked there either). The live/frozen comparison this
+# function was for still exists and is actively used, just as its own
+# separate copy in MNIST/compare_live_vs_frozen_direction.py -- that one is
+# unaffected by this removal.
 
 
 def main():
@@ -313,6 +179,34 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
+    # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- the Euclidean-consistent
+    # weight source for randers_umap_fit's A_geo (see its own weight-
+    # consistency-fix docstring). In the isomap-style pipeline
+    # (run_swiss_roll.py) D_geo is "the same D_asym construction with
+    # randers_field=None" -- but distance_graph_generation has no field
+    # parameter at all: this pipeline's asymmetry isn't injected by a
+    # field, it's the raw k-NN structural asymmetry that real IsUMap's own
+    # t-conorm+"(D+D.T)/2" step would normally erase. So the natural analog
+    # here is to do exactly that erasure ourselves: symmetrize D_asym
+    # directly.
+    #
+    # [BUG FIX] A plain average, (D_asym+D_asym.T)/2, requires BOTH
+    # directions to be finite (inf+anything=inf) -- and isumap's raw D_asym
+    # very often has i list j as a neighbour without j listing i back (no
+    # symmetry guarantee at all, epm=True "pure star graph"). At small k
+    # this made D_geo STRICTLY SPARSER than D_asym itself (empirically: at
+    # n=2000, k=5, 1115/2000 rows ended up with FEWER than emb_k real
+    # entries in D_geo, 14 rows with ZERO -- corrupting A_geo's rho/sigma
+    # calibration with inf, cascading into the trained embedding as NaN).
+    # Fix: average where both directions exist, otherwise fall back to
+    # whichever single direction is finite -- this guarantees D_geo is
+    # never sparser than D_asym in any row, restoring the "emb_k, already
+    # sized to D_asym's worst-case row, stays safely valid for D_geo too"
+    # property this was originally meant to have.
+    both_finite = np.isfinite(D_asym) & np.isfinite(D_asym.T)
+    D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
+                      np.where(np.isfinite(D_asym), D_asym, D_asym.T))
+
     # [OURS 2026-08-19] B is derived live, every epoch, purely from D_asym's
     # own asymmetry (compute_drift on N=(D_asym-D_asym.T)/(D_asym+D_asym.T),
     # no omega anywhere) and the CURRENT embedding Y -- B_fixed=None.
@@ -346,7 +240,7 @@ def main():
                             ramp=args.ramp, seed=args.seed,
                             snapshot_every=apply_snapshot_every, verbose=not args.quiet,
                             force_model=args.force_model, fr_k=args.fr_k,
-                            negative_sampling=args.neg_sampling)
+                            negative_sampling=args.neg_sampling, D_geo=D_geo)
 
     if args.init_only:
         # true pre-training state, captured before any epoch update
@@ -366,7 +260,7 @@ def main():
                         alpha=0.85, linewidths=0)
         fig.colorbar(sc, ax=ax, label="t (intrinsic coordinate)", shrink=0.6, pad=0.08)
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
@@ -376,7 +270,7 @@ def main():
         sc = ax.scatter(Y[:, 0], Y[:, 1], c=t, cmap="viridis", s=10, alpha=0.85, linewidths=0)
         plt.colorbar(sc, ax=ax, label="t (intrinsic coordinate)")
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
@@ -414,7 +308,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1], Yi[bigi, 2],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               Bi[bigi, 2] * sc_scale_i,
@@ -434,7 +328,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               color="k", alpha=0.6, width=0.006, scale=1, scale_units="xy")

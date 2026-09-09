@@ -300,7 +300,7 @@ def main():
     ax.set_ylabel("asymmetry_score (global)")
     ax.set_title(f"Asymmetry score vs. k  ({args.dataset}, n={args.n}, epochs={args.epochs})\n"
                  f"adjacency = {args.adjacency}")
-    ax.set_ylim(0, 1)
+    ax.set_ylim(0, None)  # [OURS 2026-09-06] score is unbounded now (denominator removed), only clamp the lower bound
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()

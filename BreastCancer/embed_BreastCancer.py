@@ -58,7 +58,7 @@ from matplotlib.lines import Line2D
 from sklearn.preprocessing import StandardScaler
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit
+from randers_umap import randers_umap_fit, arrow_scale
 
 
 def load_breast_cancer_csv(path):
@@ -205,7 +205,7 @@ def main():
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:25]
     if bn.max() > 0:
-        sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+        sc_scale = arrow_scale(Y, bn)
         ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
@@ -236,7 +236,7 @@ def main():
             bni = np.linalg.norm(Bi, axis=1)
             bigi = np.argsort(bni)[::-1][:25]
             if bni.max() > 0:
-                sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                sc_scale_i = arrow_scale(Yi, bni)
                 ax2.quiver(Yi[bigi, 0], Yi[bigi, 1], Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                           color="k", alpha=0.6, width=0.006, scale=1, scale_units="xy")
             ax2.set_title(f"epoch {snap['epoch']}", fontsize=9)

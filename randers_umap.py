@@ -122,22 +122,50 @@ def smooth_knn_dist(knn_dist: np.ndarray, k: int, n_iter: int = 64,
     return rho, sigma
 
 
-def fuzzy_simplicial_set(D: np.ndarray, k: int):
+def knn_mask_from_distance_matrix(D: np.ndarray, k: int) -> np.ndarray:
     """
-    [UMAP Section 3.1] Build the fuzzy graph from an input dissimilarity
-    matrix D (may be asymmetric -- our D_asym).
+    [OURS 2026-09-07] Cheap, honestly-scoped replacement for the handful of
+    call sites that only ever wanted the boolean k-NN mask out of the old
+    fuzzy_simplicial_set() (run_swiss_roll_isumap.py's locate_B_from_D_asym,
+    MNIST/compare_live_vs_frozen_direction.py's equivalent) -- those never
+    used its weighted A output at all, so calling the full function meant
+    paying for smooth_knn_dist's per-node rho/sigma binary search and then
+    throwing the result away. This does only the mask part: a thin wrapper
+    around _knn_from_distance_matrix, no rho/sigma calibration at all.
+
+    Returns
+    -------
+    knn_mask : (n, n) bool -- i's k nearest neighbours (row-wise, from D,
+               D need not be symmetric)
+    """
+    n = D.shape[0]
+    knn_idx, _ = _knn_from_distance_matrix(D, k)
+    knn_mask = np.zeros((n, n), dtype=bool)
+    rows = np.repeat(np.arange(n), k)
+    knn_mask[rows, knn_idx.ravel()] = True
+    return knn_mask
+
+
+def _knn_weights(D: np.ndarray, k: int):
+    """
+    [UMAP Section 3.1, renamed+scoped 2026-09-07] Build the UMAP-style
+    calibrated membership weight from an input dissimilarity matrix D (may
+    be asymmetric -- our D_asym). Formerly public as fuzzy_simplicial_set()
+    -- renamed and made private (leading underscore, only called from
+    randers_umap_fit's own two internal sites below) because that name
+    claimed to build an actual fuzzy simplicial COMPLEX (a topological
+    object with simplices), which this never did -- it only ever produced a
+    weighted graph (A) and a boolean k-NN mask. Kept as one shared helper
+    (rather than inlining the ~10-line rho/sigma-calibration loop twice)
+    since randers_umap_fit calls this identically for both A (from D_asym)
+    and A_geo (from D_geo) -- duplicating it verbatim in both spots would
+    just invite the two copies to silently drift apart later.
 
     [OURS 2026-09-02] Returns the raw, directed A -- used for the force
     computation's attr_coeff/rep_coeff weighting (directionally consistent
     with D_asym itself being asymmetric, and with rho_r(i->j) in
     randers_umap_fit's main loop already being asymmetric via the
-    Randers/drift substitution b_i.(y_j-y_i)). [OURS 2026-09-03] The
-    symmetrized t-conorm mu_sym this used to also return is GONE -- it
-    existed for exactly one reason (spectral_layout's eigh() needs a
-    symmetric affinity matrix), and spectral_layout itself has now been
-    removed project-wide in favour of classical_mds for every init (see
-    classical_mds's own docstring, and run_swiss_roll_isumap.py's
-    isumap_style_init) -- so mu_sym had no remaining purpose.
+    Randers/drift substitution b_i.(y_j-y_i)).
 
     Returns
     -------
@@ -247,6 +275,55 @@ def classical_mds(D: np.ndarray, d: int, seed: int = 0) -> np.ndarray:
     return Y
 
 
+def arrow_scale(Y: np.ndarray, bn: np.ndarray, frac: float = 0.12) -> float:
+    """
+    [OURS 2026-09-05] Correct replacement for the
+    `frac * (Y.max()-Y.min()) / bn.max()` pattern repeated across every
+    run_*.py/embed_*.py plotting function's drift-quiver scaling. Computes
+    the scalar multiplier `sc_scale` such that the longest drawn arrow
+    (bn.max() * sc_scale) spans `frac` (default 12%) of the embedding's own
+    visual extent -- e.g. `ax.quiver(Y[:,0], Y[:,1], B[:,0]*sc_scale,
+    B[:,1]*sc_scale, ...)`.
+
+    Bug this fixes: `Y.max()-Y.min()` on a (n, d) array flattens ALL axes
+    into one scalar (NumPy's default axis=None), so it can subtract the
+    minimum of one column from the maximum of a DIFFERENT column whenever
+    the axes sit at different absolute coordinate offsets (e.g. x centred
+    around -17, y centred around 0 -- common after classical_mds/isomap
+    placement, which is not zero-centred per axis). That produces a number
+    with no real geometric meaning and can wildly overestimate the plot's
+    true visual size, making arrows several times longer than intended
+    (observed: swiss_roll's arrows drawn at ~140% of its own y-span instead
+    of the intended 12%). Whether this bug bites depends entirely on
+    whether a given run's x/y columns happen to overlap numerically --
+    it is NOT specific to any one dataset/script, just easy to miss when
+    they happen to overlap (e.g. mammoth's runs, where it silently landed
+    close to the intended value by coincidence).
+
+    Fix: take the LARGER of each axis's own span
+    (Y.max(axis=0) - Y.min(axis=0)), which always reflects the plot's real
+    displayed size regardless of each axis's absolute offset.
+
+    Parameters
+    ----------
+    Y   : (n, d) embedding coordinates (2D or 3D)
+    bn  : (n,) per-node drift magnitudes, e.g. np.linalg.norm(B, axis=1)
+    frac: target fraction of the extent the longest arrow should span
+
+    Returns
+    -------
+    float -- 0.0 if bn is empty or all-zero (caller should already be
+    guarding quiver calls with `if bn.max() > 0:`; this just avoids a
+    division by zero if called without that guard).
+    """
+    if Y.size == 0:
+        return 0.0
+    spans = Y.max(axis=0) - Y.min(axis=0)
+    extent = float(spans.max()) if spans.size else 0.0
+    bn_max = float(bn.max()) if bn.size else 0.0
+    return frac * extent / bn_max if bn_max > 0 else 0.0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Drift vector: recomputed from the live embedding every epoch  [OURS]
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +422,7 @@ def randers_umap_fit(
     gravity_neighbor_weight: bool = True,
     randers_attractive: bool = True,
     randers_repulsive: bool = False,
+    D_geo: np.ndarray = None,
     randers_gravity: bool = False,
     drift_magnitude_target: np.ndarray = None,
     scale_B_fixed_by_knn_distance: bool = False,
@@ -405,13 +483,13 @@ def randers_umap_fit(
             attr_coeff(rho) = 2*a*b*rho^(2b-1) / (1+a*rho^(2b))   [x A, directed]
             rep_coeff(rho)  = 2*b*rho / (rho^2*(1+a*rho^(2b)))    [x (1-A), rescaled]
 
-        [OURS 2026-09-02] A here is fuzzy_simplicial_set's RAW, directed
+        [OURS 2026-09-02] A here is _knn_weights's RAW, directed
         per-row membership (A[i,j] need not equal A[j,i]). [OURS 2026-09-03]
         There is no symmetrized counterpart anymore -- the t-conorm mu_sym
         this used to also compute existed only to feed spectral_layout's
         init, and spectral_layout has since been removed project-wide (see
         classical_mds's own docstring); A is now the only membership matrix
-        fuzzy_simplicial_set returns.
+        _knn_weights returns.
 
         Edges for "fr_gravity"'s attraction term are the UNDIRECTED union
         of the UMAP k-NN graph (knn_mask | knn_mask.T -- the natural binary
@@ -492,7 +570,7 @@ def randers_umap_fit(
         constraint, does not need to imply the reverse) on the membership
         A actually used by the force computation. [OURS 2026-09-03] No
         longer also applied to a symmetrized counterpart -- there isn't
-        one anymore (see fuzzy_simplicial_set's own docstring). Used
+        one anymore (see _knn_weights's own docstring). Used
         by frozen_drift.py's joint (2n)-point embedding: a real node and
         its own virtual target must stay attractively linked, but generic
         k-NN competition among 2n-1 other points does not guarantee this
@@ -585,14 +663,18 @@ def randers_umap_fit(
     node_mass : [OURS 2026-08-06] (n,) per-node mass M[i], used only if
         use_gravity=True. None (default) uses M[i]=1 for all nodes (uniform).
 
-    randers_attractive, randers_repulsive : [OURS 2026-08-24] bool, both default True (reproduces prior behaviour
-        exactly). INDEPENDENT Randers-vs-Euclidean switches for the main
-        force's attractive and repulsive terms respectively (Section 5's
-        attr_coeff and rep_coeff) -- separate from use_drift, which
-        controls whether B is computed AT ALL, and from each other, so
-        e.g. randers_attractive=True, randers_repulsive=False runs
-        attraction through the Randers-perturbed metric while repulsion
-        stays plain Euclidean (or the reverse).
+    randers_attractive, randers_repulsive : [OURS 2026-08-24] bool. Actual
+        defaults are randers_attractive=True, randers_repulsive=False (NOT
+        "both True" -- that was a stale claim in an earlier version of this
+        docstring; every caller in this repo relies on these defaults, so
+        repulsion has always been plain-Euclidean-by-default in every run
+        this project has produced). INDEPENDENT Randers-vs-Euclidean
+        switches for the main force's attractive and repulsive terms
+        respectively (Section 5's attr_coeff and rep_coeff) -- separate from
+        use_drift, which controls whether B is computed AT ALL, and from
+        each other, so e.g. randers_attractive=True, randers_repulsive=False
+        runs attraction through the Randers-perturbed metric while
+        repulsion stays plain Euclidean (or the reverse).
 
         Two independent (rho, g) pairs are built every epoch:
             rho_r = d_mat + b_i.(y_j-y_i), g_r = e + b_i    [Randers/OURS]
@@ -608,6 +690,32 @@ def randers_umap_fit(
         False, use_gravity=True, randers_gravity=True to isolate the
         drift's effect entirely inside gravity, with the main UMAP layout
         forces staying plain Euclidean.
+
+        [OURS 2026-09-04] WEIGHT consistency fix: this flag used to only
+        switch the force term's DISTANCE argument (rho, g above), while the
+        MEMBERSHIP WEIGHT (A / (1-A), force_model="umap"'s attr_coeff/
+        rep_coeff multiplier) stayed A, built from the Randers-perturbed
+        D_asym, regardless of the flag -- so setting randers_repulsive=False
+        made the repulsion term's rho/g Euclidean but its WEIGHT still
+        silently carried drift information through A. Fixed: whichever term
+        (attr and/or rep) has its flag set to False now ALSO gets its
+        weight from A_geo (built from D_geo, the drift-free counterpart of
+        D_asym -- see D_geo below) instead of A. A term with its flag True
+        keeps using A as before.
+
+    D_geo : [OURS 2026-09-04] (n, n) ndarray or None, default None. The
+        drift-free/Euclidean counterpart of D_asym -- same graph topology,
+        same shortest-path construction, but WITHOUT the Randers
+        perturbation added to edge weights before Dijkstra (i.e. what
+        D_asym would be if randers_field=None had been passed to
+        compute_dist_matrix). Only consulted when randers_attractive=False
+        or randers_repulsive=False (see the weight-consistency note above).
+        If needed but not supplied, falls back to using A (from D_asym) as
+        the Euclidean weight too -- i.e. exact prior behaviour -- and prints
+        a warning when verbose, rather than raising, so no existing caller
+        breaks. D_asym itself is untouched by this parameter: B/drift
+        (via N = D_asym - D_asym.T) and the classical_mds init fallback
+        still always come from D_asym, regardless of D_geo or these flags.
 
     randers_gravity : [OURS 2026-08-24] bool,
         default False (reproduces prior gravity behaviour exactly -- the
@@ -735,8 +843,8 @@ def randers_umap_fit(
     # [OURS 2026-09-02] A = directed/asymmetric membership, used by the force
     # computation below (attr_coeff/rep_coeff weighting) -- consistent with
     # rho_r's own asymmetry. [OURS 2026-09-03] No separate symmetrized
-    # version anymore -- see fuzzy_simplicial_set's own docstring.
-    A, knn_mask = fuzzy_simplicial_set(D_asym, n_neighbors)
+    # version anymore -- see _knn_weights's own docstring.
+    A, knn_mask = _knn_weights(D_asym, n_neighbors)
     if force_edges is not None and len(force_edges) > 0:
         fi, fj = np.asarray(force_edges)[:, 0], np.asarray(force_edges)[:, 1]
         # A: one-directional is correct here -- force_edges is i's own
@@ -744,6 +852,41 @@ def randers_umap_fit(
         # does not need to imply the reverse.
         A[fi, fj] = 1.0
         np.fill_diagonal(A, 0.0)
+
+    # [OURS 2026-09-04] weight-consistency fix (see randers_attractive/
+    # randers_repulsive's own docstring above for the full rationale): a
+    # force term whose flag is False gets its DISTANCE argument switched to
+    # plain Euclidean (rho_e, g_e) further down, but until now it kept using
+    # A -- built from the Randers-perturbed D_asym -- as its WEIGHT too, so
+    # drift silently leaked back in through the weight even when the term
+    # claimed to be "pure Euclidean". A_geo (built from D_geo, D_asym's
+    # drift-free counterpart) is the correct weight for such a term. Only
+    # computed if actually needed (i.e. at least one flag is False) --
+    # skipped entirely when randers_attractive=randers_repulsive=True (the
+    # common case), so this costs nothing when unused.
+    A_geo = None
+    if not (randers_attractive and randers_repulsive):
+        if D_geo is not None:
+            D_geo = np.asarray(D_geo, dtype=np.float64)
+            A_geo, _ = _knn_weights(D_geo, n_neighbors)
+            if force_edges is not None and len(force_edges) > 0:
+                A_geo[fi, fj] = 1.0
+                np.fill_diagonal(A_geo, 0.0)
+        else:
+            # No D_geo supplied -- fall back to A (exact prior behaviour)
+            # rather than raising, so no existing caller breaks. Every
+            # call site in this repo currently relies on the
+            # randers_repulsive=False default without passing D_geo, so
+            # raising here would break all of them.
+            A_geo = A
+            if verbose:
+                print("WARNING: randers_attractive/randers_repulsive requests a "
+                      "Euclidean-weighted term but D_geo was not supplied -- "
+                      "falling back to the Randers-derived A as its weight too "
+                      "(drift may leak into the 'Euclidean' term's weight).")
+    A_attr = A if randers_attractive else A_geo
+    A_rep = A if randers_repulsive else A_geo
+
     a, b_param = find_ab_params(spread=spread, min_dist=min_dist)
     # [OURS 2026-08-10] norm_mode -- how N's raw units get removed before
     # it drives the drift sum. Ported from isomap_randers_umap.py (see
@@ -971,16 +1114,21 @@ def randers_umap_fit(
                 # [OURS 2026-08-31] repulsion handled by the sampled block
                 # after step=force.sum(axis=1) below -- attraction only here.
                 # [OURS 2026-09-02] A (directed), not mu_sym -- see A's own
-                # docstring in fuzzy_simplicial_set for why.
-                force = (A * attr_coeff)[:, :, np.newaxis] * g_attr
+                # docstring in _knn_weights for why. [OURS 2026-09-04]
+                # A_attr, not always A -- see the weight-consistency note in
+                # randers_attractive/randers_repulsive's own docstring.
+                force = (A_attr * attr_coeff)[:, :, np.newaxis] * g_attr
             else:
                 rho2b_rep = rho_rep ** (2 * b_param)
                 rep_coeff = (2 * b_param * rho_rep) / ((eps + rho_rep ** 2) * (1.0 + a * rho2b_rep))
 
                 # [OURS 2026-09-02] A (directed), not mu_sym -- see A's own
-                # docstring in fuzzy_simplicial_set for why.
-                force = (A * attr_coeff)[:, :, np.newaxis] * g_attr \
-                        - rep_scale * ((1.0 - A) * rep_coeff)[:, :, np.newaxis] * g_rep
+                # docstring in _knn_weights for why. [OURS 2026-09-04]
+                # A_attr/A_rep, not a single shared A -- see the
+                # weight-consistency note in randers_attractive/
+                # randers_repulsive's own docstring.
+                force = (A_attr * attr_coeff)[:, :, np.newaxis] * g_attr \
+                        - rep_scale * ((1.0 - A_rep) * rep_coeff)[:, :, np.newaxis] * g_rep
         else:  # force_model == "fr_gravity"
             # [OURS 2026-08-28] Bannister et al. Section 2 / hypergz
             # our_layout.py's own baseline forces -- see force_model's
@@ -1170,7 +1318,7 @@ def randers_umap_fit(
         # (A, the directed membership) -- "mu" kept only for backward
         # compatibility with any caller/plotting code still reading that
         # key; there is no separate symmetric graph anymore (see
-        # fuzzy_simplicial_set's own docstring for why).
+        # _knn_weights's own docstring for why).
         "Y": Y, "Y_init": Y_init, "B": B, "mu": A, "mu_directed": A,
         "knn_mask": knn_mask,
         "N": N, "a": a, "b_param": b_param, "history": history,

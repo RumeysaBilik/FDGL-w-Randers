@@ -58,6 +58,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from randers_bridge import run_located_drift
+from randers_umap import arrow_scale
 from run_sphere_tangential import make_sphere_points
 
 
@@ -224,7 +225,7 @@ def main():
                         alpha=0.85, linewidths=0)
         fig.colorbar(sc, ax=ax, label="theta (colatitude)", shrink=0.6, pad=0.08)
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
@@ -237,7 +238,7 @@ def main():
         sc = ax.scatter(Y[:, 0], Y[:, 1], c=theta, cmap="viridis", s=10, alpha=0.85, linewidths=0)
         plt.colorbar(sc, ax=ax, label="theta (colatitude)")
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
@@ -278,7 +279,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1], Yi[bigi, 2],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               Bi[bigi, 2] * sc_scale_i,
@@ -297,7 +298,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               color="k", alpha=0.6, width=0.006, scale=1, scale_units="xy")

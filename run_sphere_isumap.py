@@ -43,8 +43,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from run_sphere_tangential import make_sphere_points
-from run_swiss_roll_isumap import build_isumap_dist_matrix, isumap_style_init
-from randers_umap import randers_umap_fit
+from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
+from randers_umap import randers_umap_fit, arrow_scale
 
 
 def main():
@@ -110,6 +110,18 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
+    # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- see
+    # run_swiss_roll_isumap.py's own docstring for the full rationale AND
+    # the bug-fix note: a plain (D_asym+D_asym.T)/2 average requires BOTH
+    # directions finite, which made D_geo STRICTLY SPARSER than D_asym for
+    # isumap's asymmetric-existence graphs (some rows ending up with zero
+    # real neighbours, corrupting A_geo's calibration with inf/NaN). Fix:
+    # average where both directions exist, fall back to whichever single
+    # direction is finite otherwise.
+    both_finite = np.isfinite(D_asym) & np.isfinite(D_asym.T)
+    D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
+                      np.where(np.isfinite(D_asym), D_asym, D_asym.T))
+
     # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
     # run_swiss_roll_isumap.py's isumap_style_init docstring), NOT
     # randers_umap_fit's internal UMAP-style spectral_layout default.
@@ -129,7 +141,7 @@ def main():
                             ramp=args.ramp, seed=args.seed,
                             snapshot_every=apply_snapshot_every, verbose=not args.quiet,
                             force_model=args.force_model, fr_k=args.fr_k,
-                            negative_sampling=args.neg_sampling)
+                            negative_sampling=args.neg_sampling, D_geo=D_geo)
 
     if args.init_only:
         Y, B = out["snapshots"][0]["Y"], out["snapshots"][0]["B"]
@@ -148,7 +160,7 @@ def main():
                         alpha=0.85, linewidths=0)
         fig.colorbar(sc, ax=ax, label="theta (colatitude)", shrink=0.6, pad=0.08)
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
@@ -161,7 +173,7 @@ def main():
         sc = ax.scatter(Y[:, 0], Y[:, 1], c=theta, cmap="viridis", s=10, alpha=0.85, linewidths=0)
         plt.colorbar(sc, ax=ax, label="theta (colatitude)")
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
@@ -197,7 +209,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1], Yi[bigi, 2],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               Bi[bigi, 2] * sc_scale_i,
@@ -216,7 +228,7 @@ def main():
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
                 if bni.max() > 0:
-                    sc_scale_i = 0.12 * (Yi.max() - Yi.min()) / bni.max()
+                    sc_scale_i = arrow_scale(Yi, bni)
                     ax2.quiver(Yi[bigi, 0], Yi[bigi, 1],
                               Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,
                               color="k", alpha=0.6, width=0.006, scale=1, scale_units="xy")

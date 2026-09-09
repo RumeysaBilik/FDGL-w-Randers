@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from randers_umap import randers_umap_fit
+from randers_umap import randers_umap_fit, arrow_scale
 
 
 def main():
@@ -69,7 +69,7 @@ def main():
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:25]
     if bn.max() > 0:
-        sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+        sc_scale = arrow_scale(Y, bn)
         ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 

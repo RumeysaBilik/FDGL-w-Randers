@@ -62,7 +62,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, fuzzy_simplicial_set, classical_mds, compute_drift
+from randers_umap import randers_umap_fit, knn_mask_from_distance_matrix, classical_mds, compute_drift, arrow_scale
 
 
 def load_data(args):
@@ -121,7 +121,7 @@ def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     isumap_style_init requires for its own (deliberately sparse) D_asym.
     """
     n = D_asym.shape[0]
-    _, knn_mask = fuzzy_simplicial_set(D_asym, emb_k)
+    knn_mask = knn_mask_from_distance_matrix(D_asym, emb_k)
     Y_init = classical_mds(D_asym, d=2, seed=seed)
     N = (D_asym - D_asym.T) / (D_asym + D_asym.T + 1e-12)
     N = np.where(np.isfinite(N), N, 0.0)
@@ -249,7 +249,7 @@ def main():
         bn = np.linalg.norm(B, axis=1)
         big = np.argsort(bn)[::-1][:25]
         if bn.max() > 0:
-            sc_scale = 0.12 * (Y.max() - Y.min()) / bn.max()
+            sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xticks([]); ax.set_yticks([])

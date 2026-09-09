@@ -96,17 +96,6 @@ def make_swiss_roll(n, seed=42):
     return make_swiss_roll_randers(n, seed=seed)
 
 
-def load_digits_data(n, seed):
-    from sklearn.datasets import load_digits
-    d = load_digits()
-    X, y = d.data.astype(np.float64), d.target.astype(np.int64)
-    if n is not None and n < X.shape[0]:
-        rng = np.random.default_rng(seed)
-        idx = rng.choice(X.shape[0], size=n, replace=False)
-        X, y = X[idx], y[idx]
-    return X, y
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # shared metrics
 # ─────────────────────────────────────────────────────────────────────────
@@ -233,21 +222,6 @@ def main():
         D_asym, _, bln = compute_dist_matrix(X, n_neighbors=args.k, path_method="auto",
                                               randers_field=omega, return_adjacency=True)
         extra = {"dataset": "swiss_roll", "t": t}
-    else:
-        X, y = load_digits_data(args.n, args.seed)
-        y_color = y
-        cmap = "tab10"
-        # digits has no natural omega field -- use a generic PCA-direction
-        # asymmetric field only so D_asym is genuinely directed, matching
-        # how the isumap-family scripts build their own D_asym; the force-
-        # model comparison itself does not depend on this choice.
-        from sklearn.decomposition import PCA
-        pcs = PCA(n_components=2, random_state=args.seed).fit_transform(X)
-        omega = np.zeros_like(X)
-        omega[:, :2] = 0.05 * pcs / max(np.linalg.norm(pcs, axis=1).mean(), 1e-9)
-        D_asym, _, bln = compute_dist_matrix(X, n_neighbors=args.k, path_method="auto",
-                                              randers_field=omega, return_adjacency=True)
-        extra = {"dataset": "digits", "y": y}
 
     n = X.shape[0]
     # [OURS 2026-08-31] target asymmetry -- a property of D_asym itself,
