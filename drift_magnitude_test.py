@@ -19,8 +19,8 @@ make_*_randers() generator returns the same (X, omega, extra) triple, so a
 single small registry below is enough to dispatch to any of them; no
 per-dataset logic is duplicated). Not applicable to MNIST/BreastCancer --
 those use the live-drift mechanism (B_fixed=None, use_drift=True,
-compute_drift's own norm_mode="relative" bound), which has no locate step
-and no --normalize flag to compare against in the first place.
+compute_drift's own N=_compute_N(D_asym) bound, |N|<=1), which has no
+locate step and no --normalize flag to compare against in the first place.
 
 Mechanism: runs run_swiss_roll.py's own run_located_drift() with
 snapshot_every=N (reusing the SAME snapshot machinery randers_umap_fit

@@ -327,13 +327,74 @@ def arrow_scale(Y: np.ndarray, bn: np.ndarray, frac: float = 0.12) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Drift vector: recomputed from the live embedding every epoch  [OURS]
 # ─────────────────────────────────────────────────────────────────────────────
+def _compute_N(D_asym: np.ndarray) -> np.ndarray:
+    """
+    [OURS 2026-08-10, simplified 2026-09-09, existence-asymmetry fix
+    2026-09-09] Per-pair asymmetry signal that feeds compute_drift()'s
+    weighted sum -- dimensionless PER PAIR and bounded (|N[i,j]|<=1 by
+    construction):
+
+        N[i,j] = (D[i,j] - D[j,i]) / (D[i,j] + D[j,i] + eps)
+
+    Fixed, computed ONCE from D_asym (never re-derived per epoch -- only
+    Y/e_ij(Y) are live inside compute_drift itself).
+
+    [OURS 2026-09-09] Used to be selectable via a norm_mode switch (raw/
+    rowmax/maxabs/relative, ported from an earlier prototype's own
+    normalise_N option) -- removed: every caller in this project always
+    used "relative" (this formula, the only one of the four bounded in
+    [-1,1] by construction, so ||b_i||<=1 holds without clip_delta ever
+    doing real clamping work); the other three were dead, never-exercised
+    branches.
+
+    D_asym is not guaranteed dense (e.g. isumap's sparse D_asym, or the
+    knn-adjacency D_asym from randers_bridge.compute_dist_matrix, has
+    np.inf wherever a pair's distance is only known in one direction --
+    a real edge (i,j) need not have a real edge (j,i)).
+
+    [OURS 2026-09-09] EXISTENCE-ASYMMETRY FIX: a one-directional-only pair
+    (D[i,j] finite, D[j,i]=inf) used to be treated as "no information" and
+    zeroed out -- but a missing reverse relation IS itself a strong
+    asymmetry signal, arguably the strongest kind, and was being silently
+    thrown away. Fixed by substituting D_asym's own diameter (its largest
+    finite entry -- same convention isumap_style_init already uses for
+    Dijkstra-unreachable pairs, see isumap_bridge.py) for the missing
+    (inf) side before computing N, rather than skipping the pair:
+
+        diam      = D_asym[isfinite(D_asym)].max()   # 1.0 if none finite
+        diam_fill = diam * (1 + 1e-6)                 # strictly > diam
+        D_filled[i,j] = D_asym[i,j] if finite else diam_fill
+
+    so a one-directional pair gets
+    N[i,j] = (D[i,j]-diam_fill)/(D[i,j]+diam_fill+eps) -- negative (i
+    points to a "cheap" j while the reverse is effectively the most
+    expensive relation anywhere in the graph), scaled by the data's own
+    distances instead of jumping straight to the formula's -1 limit
+    regardless of scale. diam_fill is nudged strictly above diam (not
+    just equal to it) so a pair whose known direction happens to BE the
+    single most expensive edge in the whole graph still gets a nonzero
+    (not cancelled-to-0) asymmetry signal. Pairs with NO information in
+    EITHER direction (both D[i,j] and D[j,i] inf -- e.g. disconnected
+    components) still get N[i,j]=0: there is nothing, in either
+    direction, to signal.
+    """
+    finite = np.isfinite(D_asym)
+    diam = D_asym[finite].max() if finite.any() else 1.0
+    diam_fill = diam * (1.0 + 1e-6) if diam > 0 else 1e-6
+    D_filled = np.where(finite, D_asym, diam_fill)
+    N = (D_filled - D_filled.T) / (D_filled + D_filled.T + 1e-12)
+    both_missing = ~finite & ~finite.T
+    return np.where(both_missing, 0.0, N)
+
+
 def compute_drift(N: np.ndarray, knn_mask: np.ndarray, k: int,
                    Y: np.ndarray, clip_delta: float = 0.01,
                    eps: float = 1e-8) -> np.ndarray:
     """
     b_i = (1/k) * sum_{j in N_k(i)} N[i,j] * e_ij(Y)
 
-    N        : (n,n) = 1/2 (D_asym - D_asym^T), fixed, computed once outside
+    N        : (n,n) the per-pair asymmetry signal from _compute_N(D_asym),
+               fixed, computed once outside
     knn_mask : (n,n) bool, i's k nearest neighbours (fixed, from D_asym)
     Y        : (n,d) CURRENT embedding -- this is what makes b_i "live"
     """
@@ -427,7 +488,6 @@ def randers_umap_fit(
     drift_magnitude_target: np.ndarray = None,
     scale_B_fixed_by_knn_distance: bool = False,
     use_virtual_neighbor: bool = False,
-    norm_mode: str = "relative",
     ramp: bool = True,
     snapshot_every: int = None,
     seed: int = 0,
@@ -455,7 +515,7 @@ def randers_umap_fit(
         is untouched and applies identically to either choice: rho/g's
         Randers substitution (randers_attractive/randers_repulsive still
         pick which metric the chosen law is evaluated at), B/drift
-        (use_drift, B_fixed, norm_mode, drift_mode, ...), gravity
+        (use_drift, B_fixed, drift_mode, ...), gravity
         (use_gravity and everything under it), use_virtual_neighbor, ramp,
         grad_clip, the decaying-lr step update, and snapshotting. Ported
         from Bannister, Eppstein, Goodrich, Trott, "Force-Directed Graph
@@ -888,33 +948,7 @@ def randers_umap_fit(
     A_rep = A if randers_repulsive else A_geo
 
     a, b_param = find_ab_params(spread=spread, min_dist=min_dist)
-    # [OURS 2026-08-10] norm_mode -- how N's raw units get removed before
-    # it drives the drift sum. Ported from isomap_randers_umap.py (see
-    # that file's docstring, "normalise_N" switch): "raw" (default, our
-    # original behaviour) leaves N in D_asym's own units, which can
-    # saturate/need heavy clipping if D isn't already ~[0,1]. "relative"
-    # is dimensionless PER PAIR and bounded (|N|<=1 by construction), so
-    # ||b_i||<=1 holds without clipping ever doing real work.
-    if norm_mode == "relative":
-        N = (D_asym - D_asym.T) / (D_asym + D_asym.T + 1e-12)
-    elif norm_mode == "rowmax":
-        Dr = D_asym.copy(); np.fill_diagonal(Dr, 0.0)
-        Dr = Dr / np.maximum(Dr.max(axis=1, keepdims=True), 1e-12)
-        N = 0.5 * (Dr - Dr.T)
-    elif norm_mode == "maxabs":
-        N = 0.5 * (D_asym - D_asym.T)
-        N = N / max(np.abs(N).max(), 1e-12)
-    elif norm_mode == "raw":
-        N = 0.5 * (D_asym - D_asym.T)          # frozen asymmetric weighting [OURS]
-    else:
-        raise ValueError("norm_mode must be 'raw', 'relative', 'rowmax' or 'maxabs'")
-    # [OURS 2026-08-07] D_asym is not guaranteed dense (e.g. a sparse,
-    # pre-Dijkstra isumap data_D reconstruction has ~k defined entries per
-    # row, the rest np.inf): inf-inf=nan and finite-inf=+-inf can appear in
-    # N wherever a pair's distance is only known in one direction or
-    # neither. Undefined pairs carry no directional information, so they
-    # contribute nothing to the drift sum -- 0, not nan/inf.
-    N = np.where(np.isfinite(N), N, 0.0)
+    N = _compute_N(D_asym)
 
     if drift_mode == "knn":
         drift_mask = knn_mask

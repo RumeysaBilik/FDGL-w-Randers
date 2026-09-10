@@ -65,7 +65,7 @@ def compute_dist_matrix(
         metric="euclidean",
         randers_field=None,
         directed=None,
-        adjacency="threshold",
+        adjacency="knn",
         return_adjacency=False,
 ):
     """
@@ -87,23 +87,32 @@ def compute_dist_matrix(
                     so every point ends up with >= n_neighbors neighbours.
                     Pass a float to control the threshold directly instead.
                     Ignored when adjacency="knn".
-    adjacency     : [OURS 2026-08-20]
-                    "threshold" (default, unchanged) = the eps-threshold
-                    rule above (lwileczek/isomap style, symmetric by
-                    construction: dist(i,j)==dist(j,i) so i~j iff j~i).
-                    "knn" = TRUE per-point k-nearest-neighbours membership
-                    (sklearn.kneighbors_graph style, the pre-2026-08-11
-                    method this file used to use): node i connects to
-                    EXACTLY its n_neighbors nearest points, no more, no
-                    fewer, regardless of local density. This is NOT
-                    symmetric in general -- j being among i's k nearest
+    adjacency     : [OURS 2026-08-20, default flipped 2026-09-09]
+                    "knn" (default) = TRUE per-point k-nearest-neighbours
+                    membership (sklearn.kneighbors_graph style, the
+                    pre-2026-08-11 method this file used to use): node i
+                    connects to EXACTLY its n_neighbors nearest points, no
+                    more, no fewer, regardless of local density. This is
+                    NOT symmetric in general -- j being among i's k nearest
                     does not imply i is among j's k nearest -- so with
-                    randers_field=None this reintroduces a second,
+                    randers_field=None this is already a second,
                     topology-driven source of directionality alongside the
-                    Randers term (the exact asymmetry the 2026-08-11
-                    threshold rewrite was meant to isolate away). Kept as
-                    an explicit opt-in for side-by-side comparison, not a
-                    replacement for the default.
+                    Randers term, on top of which a real edge (i,j) can
+                    easily have no edge (j,i) at all (one-directional-only
+                    existence, D_asym[j,i]=inf) -- exactly the structural
+                    asymmetry the project wants the training signal
+                    (compute_drift's N, via _compute_N in randers_umap.py)
+                    to actually see and respond to, instead of it only
+                    ever showing up once the isumap family's own sparse,
+                    inherently-knn D_asym is used. Made the default so
+                    every script (isumap family included) sees the same
+                    kind of asymmetric-existence structure by default.
+                    "threshold" = the eps-threshold rule above
+                    (lwileczek/isomap style, symmetric by construction:
+                    dist(i,j)==dist(j,i) so i~j iff j~i -- the 2026-08-11
+                    rewrite's mechanism, default until 2026-09-09). Kept as
+                    an explicit opt-in for side-by-side comparison against
+                    the knn default.
     randers_field : (n, m) per-point drift vector omega_i (e.g. the `omega`
                     array from generated_swiss_roll-2.py), or None for the
                     plain Isomap-style geodesic distance
@@ -359,7 +368,7 @@ def reconstruct_rho(Y, B):
 def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       epochs=500, clip_delta=0.01, use_gravity=False,
                       gravity_strength=1.0, gravity_neighbor_weight=True,
-                      use_virtual_neighbor=False, proj_dim=2, adjacency="threshold",
+                      use_virtual_neighbor=False, proj_dim=2, adjacency="knn",
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
                       apply_step=True, init_method="isomap",
                       normalize_drift_by_asymmetry=False,
@@ -381,8 +390,8 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     stability_check.py's own diagnostics all call the exact same code -- no
     duplication.
 
-    adjacency : [OURS 2026-08-20] "threshold" (default,
-        unchanged) or "knn", forwarded to BOTH compute_dist_matrix calls
+    adjacency : [OURS 2026-08-20, default flipped 2026-09-09] "knn" (default)
+        or "threshold", forwarded to BOTH compute_dist_matrix calls
         below (locate step's D_sym_aug AND apply step's D_asym). See
         compute_dist_matrix's own adjacency docstring above for the full
         explanation of the difference.

@@ -101,7 +101,7 @@ def make_swiss_roll_randers(n, seed=42):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--n",      type=int, default=1000)
+    p.add_argument("--n",      type=int, default=2000)
     p.add_argument("--k",      type=int, default=20, help="k-NN for the geodesic backbone")
     p.add_argument("--neg",    type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
@@ -158,16 +158,18 @@ def main():
                          "--proj-dim). 2 (default) = existing 2D pipeline, unchanged. "
                          "3 = full 3D layout; the main scatter plot switches to a 3D "
                          "axes with 3D drift-arrow quivers automatically.")
-    p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="[OURS 2026-08-20] how "
+    p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
+                    help="[OURS 2026-08-20, default flipped 2026-09-09] how "
                          "compute_dist_matrix builds its base adjacency graph. "
-                         "'threshold' (default, unchanged) = lwileczek/isomap-style "
-                         "eps-threshold rule, symmetric by construction. 'knn' = TRUE "
-                         "per-point k-nearest-neighbours membership (sklearn.kneighbors_"
-                         "graph style), asymmetric in general -- see randers_bridge."
+                         "'knn' (default) = TRUE per-point k-nearest-neighbours "
+                         "membership (sklearn.kneighbors_graph style), asymmetric in "
+                         "general -- a real edge (i,j) can have no edge (j,i) at all, "
+                         "which is exactly the one-directional-existence asymmetry we "
+                         "want the drift signal to see by default. 'threshold' = "
+                         "lwileczek/isomap-style eps-threshold rule, symmetric by "
+                         "construction (default until 2026-09-09) -- see randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
-                         "explanation, including why 'knn' reintroduces a second, "
-                         "topology-driven source of asymmetry alongside the Randers term.")
+                         "explanation.")
     p.add_argument("--normalize", action="store_true",
                     help="[OURS 2026-08-25] default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "

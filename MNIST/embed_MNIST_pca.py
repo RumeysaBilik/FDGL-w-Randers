@@ -60,8 +60,9 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
 from data_and_plots import load_MNIST
-from distance_graph_generation import distance_graph_generation
 from randers_umap import randers_umap_fit, arrow_scale
+from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
+from sphere_view import stereographic_project
 
 
 def main():
@@ -97,6 +98,16 @@ def main():
                     help="[OURS 2026-08-26] disable the neighbour-plausibility weighting "
                          "(revert to the old unconditional gravity pull). Only matters with "
                          "--gravity.")
+    p.add_argument("--no-virtual-neighbor", action="store_true",
+                    help="[OURS 2026-09-10, default ON] each node's own virtual point "
+                         "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
+                         "neighbour, pulled with UMAP's own attraction curve -- see "
+                         "randers_umap.py's use_virtual_neighbor docstring, and "
+                         "run_mammoth_isumap.py's own --no-virtual-neighbor flag (same "
+                         "mechanism, same default) for the full explanation. Previously this "
+                         "file never passed use_virtual_neighbor at all, silently falling back "
+                         "to randers_umap_fit's own default (False) instead of matching the "
+                         "rest of the isumap family -- fixed. Pass this flag to DISABLE it.")
     p.add_argument("--ramp", action="store_true",
                     help="[OURS 2026-08-26] ramp drift's magnitude 0->1 over epochs instead "
                          "of applying it at full strength from epoch 0 (default here, "
@@ -120,6 +131,13 @@ def main():
                          "(n_negative_samples random points per node, drawn fresh every epoch) "
                          "instead of the dense/exact sum. See randers_umap_fit's own "
                          "negative_sampling docstring for the exact mechanism and rescaling.")
+    p.add_argument("--sphere-view", action="store_true",
+                    help="[OURS 2026-09-10] also save <out>_sphere.png: the trained 2D embedding "
+                         "mapped onto a unit sphere via inverse stereographic projection (same "
+                         "map-on-paper vs. map-on-a-globe idea) -- purely a post-training "
+                         "visualization, does not change training in any way. See "
+                         "randers_umap.stereographic_project's own docstring for the formula. "
+                         "Off by default; the normal flat 2D plot is always still produced.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_pca_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -151,81 +169,74 @@ def main():
         print(f"PCA: {X.shape[1]} -> {pca_dim} dims, "
               f"explained variance retained = {explained:.4f}")
 
-    # ---- IsUMap's own local, pre-symmetrization asymmetric distance -------
-    isumap_dist = distance_graph_generation(
-        X_pca, k=args.k, normalize=True, distBeyondNN=True, verbose=verbose,
-        dataIsDistMatrix=False, dataIsGeodesicDistMatrix=False, saveDistMatrix=False,
-    )
-    asymm_distance = isumap_dist[0]
-
+    # ---- IsUMap's own asymmetric distance -- SPARSE (pre-Dijkstra), fed
+    # directly into randers_umap_fit's force computation. [OURS 2026-09-09]
+    # Previously this file ran the i==j-filtered reconstruction + Dijkstra
+    # itself right here, producing a DENSE D_asym and feeding THAT to
+    # randers_umap_fit -- meaning the force computation's own k-NN selection
+    # ran on the POST-Dijkstra geodesic graph (any of the n-1 other points
+    # could end up "closest"), not the raw pre-Dijkstra star-graph structure
+    # isumap's own ~k directly-listed neighbours actually encode. Empirically
+    # verified (swiss_roll, n=500, k=15): 0/500 rows had the same k-NN SET
+    # between the sparse and Dijkstra-completed versions of the same D_asym
+    # -- a real, not cosmetic, difference. Now uses isumap_bridge.py's
+    # build_isumap_dist_matrix() (which already carries the i==j-key fix
+    # this file's own comment above used to explain by hand), byte-for-byte
+    # the same function run_mammoth_isumap.py/run_swiss_roll_isumap.py/
+    # run_sphere_isumap.py feed their own force computations -- this file's
+    # pipeline is now structurally identical to those, just with MNIST's
+    # PCA-reduced X.
     n = X_pca.shape[0]
+    D_asym = build_isumap_dist_matrix(X_pca, k=args.k, verbose=verbose)
 
-    # [OURS 2026-08-26] R's key (i,j,k) means "distance
-    # from j to k, as measured in neighbourhood i" (distance_graph_
-    # generation.py's own comp_graph(), line ~147). The DIRECT, real
-    # measured distance from point i to one of its own neighbours only
-    # appears when the key's SECOND element equals the FIRST (i==j) --
-    # comp_graph() explicitly stores it there: "if j==i: R[(i,j,k)] =
-    # knn_distances[i][ind_k]". The old code here (inherited from fdg's
-    # asymm_dist_MNIST.py) wrote asymm_matrix[i,j]=value for EVERY entry
-    # regardless of this -- for i==j entries that lands on the diagonal
-    # (self-distance, useless) and OVERWRITES itself for every one of i's
-    # neighbours since j==i is fixed; for i!=j entries it stores an
-    # unrelated triangulated j<->k distance at position [i,j], not [i,k].
-    # Net effect verified empirically: the resulting matrix's "10 nearest
-    # neighbours" per row had 0% overlap with the TRUE nearest neighbours
-    # in the data -- the neighbour graph randers_umap_fit trained on was
-    # essentially noise, which is why the embedding showed no digit
-    # clusters no matter how many epochs were run. Fixed here: only take
-    # the i==j entries (the real, direct i-to-neighbour distances), write
-    # them to D_sparse[i, k] (the THIRD element is the actual target).
-    D_sparse = np.full((n, n), np.inf)
-    np.fill_diagonal(D_sparse, 0.0)
-    for (i, j, kk), value in asymm_distance.items():
-        if i == j:
-            D_sparse[i, kk] = value
-
-    # D_sparse is still sparse (~k real entries per row, rest inf) -- most
-    # pairs were simply never measured. Complete it into a fully finite,
-    # connected DIRECTED geodesic matrix via Dijkstra, exactly like our own
-    # randers_bridge.compute_dist_matrix does for the synthetic-manifold
-    # scripts, so randers_umap_fit's own dense k-NN search (which assumes
-    # every entry is a meaningful finite number) has real data everywhere.
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.csgraph import shortest_path
-    rows, cols = np.nonzero(np.isfinite(D_sparse) & (D_sparse > 0))
-    nbg = csr_matrix((D_sparse[rows, cols], (rows, cols)), shape=(n, n))
-    D_asym, _ = shortest_path(nbg, method="auto", directed=True, return_predecessors=True)
-
-    is_symmetric = np.allclose(D_asym, D_asym.T)
+    # emb_k: some rows can have fewer real (finite) neighbours in the sparse
+    # D_asym than --emb-k requests -- clip to the worst-case row, same guard
+    # the isumap family scripts use.
+    min_real_neighbors = int(np.isfinite(D_asym).sum(axis=1).min() - 1)
+    emb_k = min(args.emb_k, max(min_real_neighbors, 1))
     if verbose:
-        n_inf = (~np.isfinite(D_asym)).sum()
+        is_symmetric = np.allclose(D_asym, D_asym.T)
         print(f"D_asym: {D_asym.shape}  symmetric={is_symmetric}  (should be False)  "
-              f"unreachable pairs={n_inf}")
+              f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
     np.save(os.path.join(save_dir, "asymm_matrix_pca.npy"), D_asym)
     np.save(os.path.join(save_dir, "labels_pca.npy"), y)
     np.save(os.path.join(save_dir, "X_pca.npy"), X_pca)
 
+    # Y_init: IsUMap's own cMDS choice (real IsUMap's default -- see
+    # isumap_style_init's own docstring), same as every other isumap-family
+    # script. Built on a SEPARATE, throwaway Dijkstra-completed dense copy,
+    # purely for this init -- does not replace the sparse D_asym fed to
+    # randers_umap_fit above.
+    Y_init = isumap_style_init(D_asym, d=2, seed=args.seed)
+
+    # D_geo: the Euclidean-consistent weight source for randers_umap_fit's
+    # weight-consistency fix (see run_swiss_roll_isumap.py's own docstring
+    # for the full rationale and the both-finite-fallback bug fix -- a plain
+    # (D_asym+D_asym.T)/2 average would be sparser than D_asym itself here).
+    # [OURS 2026-09-09] Previously never wired through for MNIST at all.
+    both_finite = np.isfinite(D_asym) & np.isfinite(D_asym.T)
+    D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
+                      np.where(np.isfinite(D_asym), D_asym, D_asym.T))
+
     # ---- embed with our own randers_umap_fit -------------------------------
-    # Identical call to embed_MNIST.py: use_drift=True, B_fixed=None -> B is
-    # driven live by compute_drift()'s own bounded N-coefficient mechanism
-    # (norm_mode="relative" default), exactly as in the existing 784-dim run.
-    # [OURS 2026-08-26] some pairs remain unreachable (inf) even after the
-    # directed Dijkstra completion above -- an inherent property of a
-    # directed k-NN graph, not a bug. randers_umap_fit's own N computation
-    # already handles this safely (np.where(isfinite(N), N, 0.0) zeroes out
-    # undefined pairs -- see its own comment), but numpy still prints a
-    # RuntimeWarning for the inf-inf/inf/inf arithmetic that produces those
-    # NaNs before they get zeroed. Suppressed here (verified harmless via
-    # direct testing) purely to keep the console output readable.
+    # [OURS 2026-08-26] some pairs remain unreachable (inf) in the sparse
+    # D_asym -- an inherent property of a directed k-NN graph, not a bug.
+    # randers_umap_fit's own N computation already handles this safely
+    # (np.where(isfinite(N), N, 0.0) zeroes out undefined pairs -- see its
+    # own comment), but numpy still prints a RuntimeWarning for the
+    # inf-inf/inf/inf arithmetic that produces those NaNs before they get
+    # zeroed. Suppressed here (verified harmless via direct testing) purely
+    # to keep the console output readable.
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
-                                n_epochs=args.epochs, use_drift=True,
+        out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
+                                n_epochs=args.epochs, use_drift=True, B_fixed=None,
+                                Y_init_override=Y_init, D_geo=D_geo,
                                 snapshot_every=args.snapshot_every,
                                 use_gravity=args.gravity,
                                 gravity_strength=args.gravity_strength,
                                 gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
+                                use_virtual_neighbor=not args.no_virtual_neighbor,
                                 ramp=args.ramp,
                                 force_model=args.force_model, fr_k=args.fr_k,
                                 negative_sampling=args.neg_sampling,
@@ -238,7 +249,7 @@ def main():
     plt.colorbar(sc, ax=ax, label="digit", ticks=range(10))
 
     bn = np.linalg.norm(B, axis=1)
-    big = np.argsort(bn)[::-1][:25]
+    big = np.argsort(bn)[::-1][:100]
     if bn.max() > 0:
         sc_scale = arrow_scale(Y, bn)
         ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
@@ -257,6 +268,40 @@ def main():
     if verbose:
         print(f"\nwrote {out_path} and {args.out}.npz (in {save_dir})")
 
+    # ---- sphere view: same trained Y, mapped onto a unit sphere via inverse
+    # stereographic projection (map-on-paper vs. map-on-a-globe) -- purely a
+    # post-training visualization, --sphere-view opt-in, training itself is
+    # completely untouched. [OURS 2026-09-10]
+    if args.sphere_view:
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers 3d projection)
+        Y_sphere, center, scale = stereographic_project(Y)
+        fig_s = plt.figure(figsize=(9, 8))
+        ax_s = fig_s.add_subplot(111, projection="3d")
+        sc_s = ax_s.scatter(Y_sphere[:, 0], Y_sphere[:, 1], Y_sphere[:, 2],
+                            c=y, cmap="tab10", s=6, alpha=0.9, linewidths=0)
+        fig_s.colorbar(sc_s, ax=ax_s, label="digit", ticks=range(10), shrink=0.6)
+
+        u, v = np.mgrid[0:2 * np.pi:40j, 0:np.pi:20j]
+        xs, ys_, zs = np.cos(u) * np.sin(v), np.sin(u) * np.sin(v), np.cos(v)
+        ax_s.plot_wireframe(xs, ys_, zs, color="gray", linewidth=0.3, alpha=0.2)
+
+        if bn.max() > 0:
+            heads2d = Y[big] + B[big] * sc_scale
+            heads3d, _, _ = stereographic_project(heads2d, center=center, scale=scale)
+            tails3d = Y_sphere[big]
+            for t, h in zip(tails3d, heads3d):
+                ax_s.plot([t[0], h[0]], [t[1], h[1]], [t[2], h[2]],
+                          color="k", alpha=0.6, linewidth=0.8)
+
+        ax_s.set_xticks([]); ax_s.set_yticks([]); ax_s.set_zticks([])
+        ax_s.set_title(f"Randers-UMAP on MNIST (PCA {X.shape[1]}->{pca_dim}D, sphere view, "
+                        f"n={n})", fontsize=10)
+        fig_s.tight_layout()
+        sphere_path = os.path.join(save_dir, f"{args.out}_sphere.png")
+        fig_s.savefig(sphere_path, dpi=150)
+        if verbose:
+            print(f"wrote {sphere_path}")
+
     # ---- snapshot grid: init -> every N epochs -> final, side by side -----
     # [OURS 2026-08-26]
     # same mechanism as run_swiss_roll.py's own --snapshot-every.
@@ -273,7 +318,7 @@ def main():
             sc2 = ax2.scatter(Yi[:, 0], Yi[:, 1], c=y, cmap="tab10", s=6,
                               alpha=0.85, linewidths=0, vmin=0, vmax=9)
             bni = np.linalg.norm(Bi, axis=1)
-            bigi = np.argsort(bni)[::-1][:25]
+            bigi = np.argsort(bni)[::-1][:100]
             if bni.max() > 0:
                 sc_scale_i = arrow_scale(Yi, bni)
                 ax2.quiver(Yi[bigi, 0], Yi[bigi, 1], Bi[bigi, 0] * sc_scale_i, Bi[bigi, 1] * sc_scale_i,

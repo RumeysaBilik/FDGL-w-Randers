@@ -51,7 +51,7 @@ from randers_umap import randers_umap_fit, arrow_scale
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--n", type=int, default=1000)
+    p.add_argument("--n", type=int, default=5000)
     p.add_argument("--k", type=int, default=30, help="k for distance_graph_generation (isumap's own D_asym)")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)

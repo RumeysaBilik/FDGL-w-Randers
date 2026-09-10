@@ -85,7 +85,7 @@ def make_sphere_radial_randers(n, seed=42, radius=10.0, alpha=0.5):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--n",      type=int, default=1000)
+    p.add_argument("--n",      type=int, default=5000)
     p.add_argument("--radius", type=float, default=10.0)
     p.add_argument("--k",      type=int, default=20, help="k-NN for the geodesic backbone")
     p.add_argument("--neg",    type=int, default=10)
@@ -119,13 +119,15 @@ def main():
                          "step's force-directed training -- see run_swiss_roll.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
-    p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="[OURS 2026-08-20] how "
+    p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
+                    help="[OURS 2026-08-20, default flipped 2026-09-09] how "
                          "compute_dist_matrix builds its base adjacency graph -- see "
                          "run_swiss_roll.py's --adjacency help / randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
-                         "explanation. 'threshold' (default) = unchanged. 'knn' = TRUE "
-                         "per-point k-nearest-neighbours membership, asymmetric in general.")
+                         "explanation. 'knn' (default) = TRUE per-point "
+                         "k-nearest-neighbours membership, asymmetric in general. "
+                         "'threshold' = symmetric by construction (default until "
+                         "2026-09-09).")
     p.add_argument("--normalize", action="store_true",
                     help="[OURS 2026-08-25] default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "

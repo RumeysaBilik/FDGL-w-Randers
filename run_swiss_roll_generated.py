@@ -92,7 +92,7 @@ def make_swiss_roll_randers_generated(n, seed=42, noise=0.0):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--n",      type=int, default=1000)
+    p.add_argument("--n",      type=int, default=2000)
     p.add_argument("--k",      type=int, default=20, help="k-NN for the geodesic backbone")
     p.add_argument("--neg",    type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
@@ -134,11 +134,12 @@ def main():
                     help="embedding dimension for the locate step's placement AND the apply "
                          "step's force-directed training. 2 (default) = existing 2D pipeline. "
                          "3 = full 3D layout.")
-    p.add_argument("--adjacency", choices=["threshold", "knn"], default="threshold",
-                    help="how compute_dist_matrix builds its base adjacency graph. "
-                         "'threshold' (default) = eps-threshold rule, symmetric by "
-                         "construction. 'knn' = true per-point k-nearest-neighbours "
-                         "membership, asymmetric in general -- see randers_bridge."
+    p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
+                    help="[default flipped 2026-09-09] how compute_dist_matrix builds "
+                         "its base adjacency graph. 'knn' (default) = true per-point "
+                         "k-nearest-neighbours membership, asymmetric in general. "
+                         "'threshold' = eps-threshold rule, symmetric by construction "
+                         "(default until 2026-09-09) -- see randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full explanation.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="swiss_embedding_generated")
