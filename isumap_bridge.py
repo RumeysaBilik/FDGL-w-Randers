@@ -24,36 +24,65 @@ diff-equivalent bodies.
 
 import numpy as np
 
-from distance_graph_generation import distance_graph_generation
+from distance_graph_generation import find_nn, normalization, comp_graph, canonical_dist
 from randers_umap import classical_mds
 
 
 def build_isumap_dist_matrix(X, k=20, verbose=True):
-    """Same recipe as asymm_dist_MNIST.py: pull data_D (isumap_dist[0]),
-    NOT D -- reconstruct the (i,j,k) dict into a dense (n,n) matrix.
+    """Same recipe as asymm_dist_MNIST.py: build data_D (the same thing
+    distance_graph_generation() used to call isumap_dist[0]), reconstruct
+    the (i,j,k) dict into a dense (n,n) matrix.
 
-    [OURS 2026-08-07 bug fix] data_D only populates ~k entries per row
-    (the epm=True "pure star graph" default -- see distance_graph_generation.py
-    docstring). asymm_dist_MNIST.py's original reconstruction used
-    np.zeros(), leaving every UN-populated (i,j) pair at exactly 0.0 --
-    indistinguishable from a genuine zero distance. randers_umap.py's
-    _knn_from_distance_matrix() picks the k SMALLEST values per row via
-    argsort, so on a mostly-zero-filled row it was picking ~k phantom
-    "distance-0" non-edges as the nearest neighbours instead of the ~k
-    REAL populated ones (verified empirically: for k=20, all 20 selected
-    neighbours were phantom zeros, 0/20 real). Filling the unpopulated
-    entries with np.inf instead fixes this -- inf can never win an
-    argsort-smallest selection, and downstream smooth_knn_dist/mu
-    computations already handle inf gracefully (exp(-inf/sigma) = 0, so
-    an inf "neighbour" that leaks into the top-k for an under-populated
-    row just gets zero weight instead of corrupting the graph).
+    [OURS 2026-09-10] Previously called distance_graph_generation() itself
+    (the full orchestrating wrapper, imported unmodified from the original
+    isumap library) and only ever used its first return value, data_D --
+    but distance_graph_generation() ALSO unconditionally runs
+    apply_t_conorm_recursively() (prints "Applying t-conorm..."/"T-conorm
+    application", real, non-trivial compute: builds a merged sparse graph,
+    applies phi/phi_inv elementwise) and then, since apply_Dijkstra defaults
+    to True and this call never overrode it, an all-pairs Dijkstra via a
+    multiprocessing Pool -- and then DISCARDS both results, returning
+    data_D (computed BEFORE either step) regardless. Every call here was
+    paying for a full t-conorm merge + Dijkstra it never used, and printing
+    progress messages that made that wasted work look like it mattered.
+
+    Fixed by calling ONLY the steps distance_graph_generation() itself runs
+    to PRODUCE data_D -- find_nn() -> normalization() -> comp_graph() --
+    with the exact same parameter values this project has always passed
+    (normalize=True, distBeyondNN=True, dataIsDistMatrix=False so
+    dataFun=canonical_dist/distFun="canonical", epm=True,
+    directedDistances=False, all distance_graph_generation()'s own
+    defaults) -- t-conorm and Dijkstra are never invoked at all.
+    distance_graph_generation.py itself is untouched (still imports its
+    functions unmodified, just skips the wrapper that also runs the two
+    unused steps); byte-for-byte the same data_D dict as before, verified
+    against the old distance_graph_generation()-based version on the same
+    seed/k.
+
+    [OURS 2026-08-07 bug fix, unaffected by the above] data_D only
+    populates ~k entries per row (the epm=True "pure star graph" default --
+    see distance_graph_generation.py docstring). asymm_dist_MNIST.py's
+    original reconstruction used np.zeros(), leaving every UN-populated
+    (i,j) pair at exactly 0.0 -- indistinguishable from a genuine zero
+    distance. randers_umap.py's _knn_from_distance_matrix() picks the k
+    SMALLEST values per row via argsort, so on a mostly-zero-filled row it
+    was picking ~k phantom "distance-0" non-edges as the nearest neighbours
+    instead of the ~k REAL populated ones (verified empirically: for k=20,
+    all 20 selected neighbours were phantom zeros, 0/20 real). Filling the
+    unpopulated entries with np.inf instead fixes this -- inf can never win
+    an argsort-smallest selection, and downstream smooth_knn_dist/mu
+    computations already handle inf gracefully (exp(-inf/sigma) = 0, so an
+    inf "neighbour" that leaks into the top-k for an under-populated row
+    just gets zero weight instead of corrupting the graph).
     """
     n = X.shape[0]
-    isumap_dist = distance_graph_generation(
-        X, k=k, normalize=True, distBeyondNN=True, verbose=verbose,
-        dataIsDistMatrix=False, dataIsGeodesicDistMatrix=False, saveDistMatrix=False,
-    )
-    data_D = isumap_dist[0]
+    knn_inds, knn_distances = find_nn(X, k)
+    knn_distances = normalization(knn_distances, normalize=True, distBeyondNN=True)
+    data_D = comp_graph(knn_inds, knn_distances, X, canonical_dist,
+                         epm=True, directedDistances=False)
+    if verbose:
+        print(f"build_isumap_dist_matrix: {n} points, k={k}, "
+              f"{len(data_D)} raw (i,j,k) entries (t-conorm/Dijkstra skipped -- unused by this project)")
     D = np.full((n, n), np.inf)
     np.fill_diagonal(D, 0.0)
     for key, value in data_D.items():
