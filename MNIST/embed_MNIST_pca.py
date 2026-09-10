@@ -60,7 +60,8 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
 from data_and_plots import load_MNIST
-from randers_umap import randers_umap_fit, arrow_scale
+from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
+                           compute_drift, knn_mask_from_distance_matrix)
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
 from sphere_view import stereographic_project
 
@@ -108,6 +109,12 @@ def main():
                          "file never passed use_virtual_neighbor at all, silently falling back "
                          "to randers_umap_fit's own default (False) instead of matching the "
                          "rest of the isumap family -- fixed. Pass this flag to DISABLE it.")
+    p.add_argument("--fixed-drift", action="store_true",
+                    help="[OURS 2026-09-10] derive B ONCE from D_asym's own asymmetry at "
+                         "Y_init and FREEZE it for the whole run, instead of the default live "
+                         "mechanism (B recomputed from the CURRENT Y every epoch) -- see "
+                         "run_swiss_roll_isumap.py's --fixed-drift help for the full "
+                         "explanation. Off by default.")
     p.add_argument("--ramp", action="store_true",
                     help="[OURS 2026-08-26] ramp drift's magnitude 0->1 over epochs instead "
                          "of applying it at full strength from epoch 0 (default here, "
@@ -210,6 +217,19 @@ def main():
     # randers_umap_fit above.
     Y_init = isumap_style_init(D_asym, d=2, seed=args.seed)
 
+    # [OURS 2026-09-10] --fixed-drift: derive B ONCE from D_asym's own
+    # asymmetry at Y_init, then freeze it for the whole run -- see the flag's
+    # own help text above. B_fixed=None (default) keeps the live mechanism.
+    if args.fixed_drift:
+        if verbose:
+            print(f"\nDeriving B ONCE from D_asym's own asymmetry at Y_init, then freezing it "
+                  f"for the whole run (--fixed-drift)...")
+        knn_mask_fixed = knn_mask_from_distance_matrix(D_asym, emb_k)
+        N_fixed = _compute_N(D_asym)
+        B_fixed = compute_drift(N_fixed, knn_mask_fixed, emb_k, Y_init, clip_delta=0.01)
+    else:
+        B_fixed = None
+
     # D_geo: the Euclidean-consistent weight source for randers_umap_fit's
     # weight-consistency fix (see run_swiss_roll_isumap.py's own docstring
     # for the full rationale and the both-finite-fallback bug fix -- a plain
@@ -230,7 +250,7 @@ def main():
     # to keep the console output readable.
     with np.errstate(invalid="ignore", divide="ignore"):
         out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
-                                n_epochs=args.epochs, use_drift=True, B_fixed=None,
+                                n_epochs=args.epochs, use_drift=True, B_fixed=B_fixed,
                                 Y_init_override=Y_init, D_geo=D_geo,
                                 snapshot_every=args.snapshot_every,
                                 use_gravity=args.gravity,

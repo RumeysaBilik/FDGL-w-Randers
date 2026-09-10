@@ -46,7 +46,8 @@ sys.path.insert(0, str(HERE))
 
 from run_mammoth import make_mammoth_randers
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
-from randers_umap import randers_umap_fit, arrow_scale
+from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
+                           compute_drift, knn_mask_from_distance_matrix)
 
 
 def main():
@@ -67,6 +68,12 @@ def main():
                          "randers_umap.py's use_virtual_neighbor docstring for the full "
                          "explanation. Pass this flag to DISABLE it.")
     p.add_argument("--clip-delta", type=float, default=0.01)
+    p.add_argument("--fixed-drift", action="store_true",
+                    help="[OURS 2026-09-10] derive B ONCE from D_asym's own asymmetry at "
+                         "Y_init and FREEZE it for the whole run, instead of the default live "
+                         "mechanism (B recomputed from the CURRENT Y every epoch) -- see "
+                         "run_swiss_roll_isumap.py's --fixed-drift help for the full "
+                         "explanation. Off by default.")
     p.add_argument("--ramp", action="store_true")
     p.add_argument("--init-only", action="store_true",
                     help="stop before force-directed training -- runs a single epoch with an "
@@ -136,10 +143,20 @@ def main():
         print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
     Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
 
-    if not args.quiet:
-        print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
+    if args.fixed_drift:
+        if not args.quiet:
+            print(f"\nDeriving B ONCE from D_asym's own asymmetry at Y_init, then freezing it "
+                  f"for the whole run (--fixed-drift)...")
+        knn_mask_fixed = knn_mask_from_distance_matrix(D_asym, emb_k)
+        N_fixed = _compute_N(D_asym)
+        B_fixed = compute_drift(N_fixed, knn_mask_fixed, emb_k, Y_init, clip_delta=args.clip_delta)
+    else:
+        if not args.quiet:
+            print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
+        B_fixed = None
+
     out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
-                            n_epochs=apply_epochs, use_drift=True, B_fixed=None,
+                            n_epochs=apply_epochs, use_drift=True, B_fixed=B_fixed,
                             d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,
                             use_gravity=args.gravity, gravity_strength=args.gravity_strength,
@@ -185,7 +202,8 @@ def main():
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
-    drift_label = "live B (from D_asym asymmetry only)"
+    drift_label = ("frozen B (from D_asym asymmetry at Y_init only)" if args.fixed_drift
+                   else "live B (from D_asym asymmetry only)")
     init_suffix = ", INIT ONLY (no training)" if args.init_only else f", epochs={args.epochs}"
     ax.set_title(f"Randers-UMAP mammoth, isumap-derived D, {drift_label}{init_suffix}  (n={args.n})", fontsize=11)
     fig.tight_layout()
