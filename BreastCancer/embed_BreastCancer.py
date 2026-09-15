@@ -47,6 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
+# [OURS 2026-09-15] distance_graph_generation.py now lives in
+# <FDGL root>/isumap/, not flat in ROOT -- added explicitly.
+sys.path.insert(0, os.path.join(ROOT, "isumap"))
 
 import numpy as np
 import pandas as pd

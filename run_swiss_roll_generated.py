@@ -126,10 +126,6 @@ def main():
                     help="stop after the locate step -- skip the force-directed apply/"
                          "training step entirely, and just plot/save the raw located "
                          "embedding (Y_real0) with its drift vectors (B_located).")
-    p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
-                    help="locate step's placement method. 'isomap' (default) = classical_mds. "
-                         "'umap' is kept for backward CLI compat but is now IDENTICAL to "
-                         "'isomap' -- spectral_layout was removed project-wide.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="embedding dimension for the locate step's placement AND the apply "
                          "step's force-directed training. 2 (default) = existing 2D pipeline. "
@@ -179,7 +175,7 @@ def main():
                                proj_dim=args.proj_dim, adjacency=args.adjacency,
                                snapshot_every=args.snapshot_every, ramp=args.ramp,
                                seed=args.seed, verbose=not args.quiet,
-                               apply_step=not args.init_only, init_method=args.init_method)
+                               apply_step=not args.init_only)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
@@ -209,10 +205,10 @@ def main():
 
     if args.init_only:
         ax.set_title(f"Randers-UMAP swiss-roll (generated field), LOCATED INIT ONLY "
-                     f"({args.init_method}, no training)  (n={n})", fontsize=11)
+                     f"(no training)  (n={n})", fontsize=11)
     else:
         ax.set_title(f"Randers-UMAP swiss-roll (generated field), located-drift init "
-                     f"({args.init_method})  (n={n})", fontsize=11)
+                     f"(n={n})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 

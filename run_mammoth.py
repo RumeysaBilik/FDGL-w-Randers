@@ -115,13 +115,6 @@ def main():
     p.add_argument("--snapshot-every", type=int, default=None)
     p.add_argument("--ramp", action="store_true")
     p.add_argument("--init-only", action="store_true")
-    p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
-                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18] locate "
-                         "step's placement method. 'isomap' (default) = "
-                         "classical_mds (Isomap's own finishing step). 'umap' is kept for "
-                         "backward CLI compat but is now IDENTICAL to 'isomap' -- "
-                         "spectral_layout was removed project-wide (see "
-                         "randers_umap.classical_mds's own docstring).")
     p.add_argument("--alpha", type=float, default=0.5, help="max ||omega|| for the mammoth drift field")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="[OURS 2026-08-20] embedding "
@@ -228,7 +221,7 @@ def main():
                                use_virtual_neighbor=not args.no_virtual_neighbor,
                                proj_dim=args.proj_dim, adjacency=args.adjacency,
                                seed=args.seed, verbose=not args.quiet,
-                               apply_step=not args.init_only, init_method=args.init_method,
+                               apply_step=not args.init_only,
                                normalize_drift_by_asymmetry=args.normalize,
                                force_model=args.force_model, fr_k=args.fr_k,
                                negative_sampling=args.neg_sampling)
@@ -265,9 +258,9 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
     if args.init_only:
-        ax.set_title(f"Randers-UMAP mammoth, LOCATED INIT ONLY ({args.init_method}, no training)  (n={n})", fontsize=11)
+        ax.set_title(f"Randers-UMAP mammoth, LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP mammoth, located-drift init ({args.init_method})  "
+        ax.set_title(f"Randers-UMAP mammoth, located-drift init  "
                      f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)

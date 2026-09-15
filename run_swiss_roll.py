@@ -144,13 +144,6 @@ def main():
                          "the raw located embedding (Y_real0) with its drift vectors "
                          "(B_located). Ignores --epochs, --ramp, --gravity, "
                          "--snapshot-every (there's no training loop to snapshot).")
-    p.add_argument("--init-method", choices=["umap", "isomap"], default="isomap",
-                    help="[OURS 2026-08-16, default changed to 'isomap' 2026-08-18] locate "
-                         "step's placement method. 'isomap' (default) = "
-                         "classical_mds (Isomap's own finishing step) -- makes the whole pipeline "
-                         "consistently Isomap-style, not just the distance construction. 'umap' "
-                         "is kept for backward CLI compat but is now IDENTICAL to 'isomap' -- "
-                         "spectral_layout was removed project-wide.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="[OURS 2026-08-20] embedding "
                          "dimension for the locate step's placement AND the apply "
@@ -241,7 +234,7 @@ def main():
                                proj_dim=args.proj_dim, adjacency=args.adjacency,
                                snapshot_every=args.snapshot_every, ramp=args.ramp,
                                seed=args.seed, verbose=not args.quiet,
-                               apply_step=not args.init_only, init_method=args.init_method,
+                               apply_step=not args.init_only,
                                normalize_drift_by_asymmetry=args.normalize,
                                force_model=args.force_model, fr_k=args.fr_k,
                                negative_sampling=args.neg_sampling)
@@ -276,9 +269,9 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
     if args.init_only:
-        ax.set_title(f"Randers-UMAP swiss-roll, LOCATED INIT ONLY ({args.init_method}, no training)  (n={n})", fontsize=11)
+        ax.set_title(f"Randers-UMAP swiss-roll, LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP swiss-roll, located-drift init ({args.init_method})  "
+        ax.set_title(f"Randers-UMAP swiss-roll, located-drift init  "
                      f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)

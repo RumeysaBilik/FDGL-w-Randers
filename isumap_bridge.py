@@ -22,6 +22,17 @@ _knn_weights split from the same day): no behaviour change, verified via
 diff-equivalent bodies.
 """
 
+import os
+import sys
+
+# [OURS 2026-09-15] distance_graph_generation.py (and the rest of the
+# vendored isumap library) now lives in isumap/, not flat in this
+# directory -- added explicitly here (rather than relying on every caller
+# to have already put isumap/ on sys.path) so this module works regardless
+# of who imports it first/in what order.
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "isumap"))
+
 import numpy as np
 
 from distance_graph_generation import find_nn, normalization, comp_graph, canonical_dist

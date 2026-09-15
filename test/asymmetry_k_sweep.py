@@ -45,7 +45,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
+# [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
+# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# added ROOT explicitly.
+sys.path.insert(0, str(ROOT))
 
 from randers_bridge import run_located_drift
 from run_swiss_roll import make_swiss_roll_randers

@@ -370,7 +370,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       gravity_strength=1.0, gravity_neighbor_weight=True,
                       use_virtual_neighbor=False, proj_dim=2, adjacency="knn",
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
-                      apply_step=True, init_method="isomap",
+                      apply_step=True,
                       normalize_drift_by_asymmetry=False,
                       force_model="fr_gravity", fr_k=None, negative_sampling=False,
                       randers_attractive=True, randers_repulsive=False):
@@ -422,17 +422,14 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                     only a_i (each real point's own position) trains each
                     epoch, b_i is never touched.
 
-    init_method : [OURS 2026-08-16] "isomap" (default) uses classical_mds --
-        Isomap's own finishing step (D_sym_aug here is already Isomap-style
-        k-NN+Dijkstra via compute_dist_matrix, fully dense, so this makes
-        the WHOLE pipeline consistently Isomap, not just the distance
-        construction). [OURS 2026-09-03] "umap" is kept as a valid choice
-        only so existing CLI flags don't break -- it used to use
-        fuzzy_simplicial_set+spectral_layout (UMAP's own Laplacian-eigenmap
-        init) but spectral_layout has been removed project-wide, so "umap"
-        is now IDENTICAL to "isomap" (both call classical_mds). Only
-        affects STEP 1's placement method; everything else (B extraction,
-        apply-step training) is identical regardless of this choice.
+    STEP 1's placement method is always classical_mds on D_sym_aug (Isomap-
+    style k-NN+Dijkstra via compute_dist_matrix, fully dense). [OURS
+    2026-09-11] Previously selectable via an init_method="umap"/"isomap"
+    switch, but "umap" (fuzzy_simplicial_set+spectral_layout, UMAP's own
+    Laplacian-eigenmap init) was never actually used by this project and
+    spectral_layout was removed project-wide -- the switch had degenerated
+    into two branches both calling classical_mds, so it was removed
+    entirely rather than kept as dead choice.
 
     snapshot_every : [OURS 2026-08-11] int or None. If given, forwarded to
         the APPLY step's randers_umap_fit call only (the locate step's
@@ -480,27 +477,13 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     # [OURS 2026-08-16] init-only: ONE deterministic placement call on the
     # augmented graph, no force-directed training. locate_epochs is
     # intentionally unused now -- kept as a parameter only so existing
-    # callers/CLI flags don't break.
-    if init_method == "isomap":
-        if verbose:
-            print(f"Locate: classical_mds on the augmented graph (no training)...")
-        Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
-    elif init_method == "umap":
-        # [OURS 2026-09-03] spectral_layout has been removed project-wide
-        # (see randers_umap.classical_mds's own docstring for the full
-        # rationale -- confirmed against real IsUMap's own source that
-        # cMDS, not a UMAP-style spectral/Laplacian-eigenmap init, is the
-        # right default everywhere in this project). init_method="umap" is
-        # kept as a valid choice only so existing CLI flags across the
-        # run_*.py scripts don't break -- it is now IDENTICAL to
-        # init_method="isomap" (both call classical_mds), not a distinct
-        # spectral alternative anymore.
-        if verbose:
-            print(f"Locate: classical_mds on the augmented graph (init_method='umap' is now "
-                  f"identical to 'isomap' -- spectral_layout was removed project-wide)...")
-        Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
-    else:
-        raise ValueError(f"init_method must be 'umap' or 'isomap', got {init_method!r}")
+    # callers/CLI flags don't break. [OURS 2026-09-11] the old
+    # init_method="isomap"/"umap" switch is gone -- "umap" was never
+    # actually distinct (spectral_layout was removed project-wide, so it
+    # just called classical_mds too) and was never selected in practice.
+    if verbose:
+        print(f"Locate: classical_mds on the augmented graph (no training)...")
+    Y_aug0 = classical_mds(D_sym_aug, d=proj_dim, seed=seed)
     Y_real0, Y_virtual0 = Y_aug0[:n], Y_aug0[n:]
 
     B_located = Y_virtual0 - Y_real0

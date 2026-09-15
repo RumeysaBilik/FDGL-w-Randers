@@ -83,10 +83,46 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from run_swiss_roll import make_swiss_roll_randers
 from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
                            compute_drift, knn_mask_from_distance_matrix)
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
+
+
+def make_swiss_roll_randers(n, seed=42):
+    """[OURS 2026-09-15] Own copy, not imported from run_swiss_roll.py --
+    was previously `from run_swiss_roll import make_swiss_roll_randers`,
+    which meant this file's dataset depended on another run_*.py script's
+    module. Both files are effectively unrelated pipelines (Generated vs
+    Calculated) that happen to want the same swiss-roll point cloud +
+    ground-truth omega for comparison -- keeping a cross-import between
+    them just for this one shared generator wasn't worth the coupling.
+    Exact construction from generated_swiss_roll-2.py, parameterised by n
+    -- identical to run_swiss_roll.py's own copy, kept in sync by hand if
+    either ever changes."""
+    rng = np.random.RandomState(seed)
+
+    t = 1.5 * np.pi * (1 + 2 * rng.rand(n))
+    height = 21 * rng.rand(n)
+
+    x = t * np.cos(t)
+    z = t * np.sin(t)
+    y = height
+    X = np.column_stack([x, y, z])
+
+    # [OURS 2026-08-16, per DAGES's actual main_swiss_roll_full.py] true
+    # tangent-to-the-spiral direction: d/dt (t*cos t, t*sin t), the exact
+    # derivative of the parametric curve -- includes the radial-growth
+    # component a naive 90-degree-rotation field would miss.
+    tangent_x = np.cos(t) - t * np.sin(t)
+    tangent_z = np.sin(t) + t * np.cos(t)
+    V = np.column_stack([tangent_x, np.zeros(n), tangent_z])
+    V = V / np.linalg.norm(V, axis=1)[:, None]
+
+    alpha = 0.5
+    omega = alpha * V
+
+    return X, omega, t
+
 
 # [OURS 2026-09-08] locate_B_from_D_asym() (the frozen-B alternative to the
 # live mechanism main() actually runs) removed -- confirmed dead code, never

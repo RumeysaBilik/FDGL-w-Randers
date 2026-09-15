@@ -76,7 +76,12 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+# [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
+# root where randers_bridge.py/randers_umap.py actually live -- added
+# ROOT explicitly.
+sys.path.insert(0, ROOT)
 
 import numpy as np
 import matplotlib

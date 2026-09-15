@@ -52,6 +52,9 @@ ROOT = os.path.dirname(HERE)
 # this script runnable regardless of cwd.
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
+# [OURS 2026-09-15] data_and_plots.py now lives in <FDGL root>/isumap/, not
+# flat in ROOT -- added explicitly.
+sys.path.insert(0, os.path.join(ROOT, "isumap"))
 
 import numpy as np
 import matplotlib
