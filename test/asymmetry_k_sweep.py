@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-asymmetry_k_sweep.py -- two modes, both built on run_located_drift's
+asymmetry_k_sweep.py -- two modes, both built on fdgl_pipeline's
 "initial" (target, D_asym) vs. "final" (trained embedding) asymmetry_score
 (randers_bridge.asymmetry_score/asymmetry_score_final), on any of this
 project's 4 Randers-field datasets (swiss_roll, mammoth, sphere_tangential,
@@ -12,7 +12,7 @@ sphere_radial) -- see --dataset below.
     nodes) behaves as k varies -- one point per k.
 
 --mode distribution : [OURS 2026-09-01] For a SINGLE chosen k (--k, not a
-    k-min/k-max/k-step range), runs run_located_drift ONCE and looks at
+    k-min/k-max/k-step range), runs fdgl_pipeline ONCE and looks at
     asymmetry_per_node / asymmetry_per_node_final (n,) directly, instead of
     their means (asymmetry_score / asymmetry_score_final). For each node i,
     computes
@@ -48,15 +48,15 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# root where randers_bridge.py/run_swiss_roll_generated.py/etc. actually live --
 # added ROOT explicitly.
 sys.path.insert(0, str(ROOT))
 
-from randers_bridge import run_located_drift
-from run_swiss_roll import make_swiss_roll_randers
-from run_mammoth import make_mammoth_randers
-from run_sphere_tangential import make_sphere_tangential_randers
-from run_sphere_radial import make_sphere_radial_randers
+from randers_bridge import fdgl_pipeline
+from run_swiss_roll_generated import make_swiss_roll_randers
+from run_mammoth_generated import make_mammoth_randers
+from run_sphere_tangential_generated import make_sphere_tangential_randers
+from run_sphere_radial_generated import make_sphere_radial_randers
 
 # [OURS 2026-08-25] each generator shares the same (X, omega, label) return
 # signature (label is only used for plot colouring elsewhere -- unused
@@ -93,7 +93,7 @@ def sweep_asymmetry_vs_k(X, omega, k_values, adjacency, epochs, neg, seed, verbo
                           force_model="fr_gravity", fr_k=None, negative_sampling=False):
     """
     For each k in k_values, runs the FULL located-drift pipeline
-    (run_located_drift, apply_step=True -- real force-directed training,
+    (fdgl_pipeline, apply_step=True -- real force-directed training,
     not just a D_asym rebuild) with the given adjacency mode, and reads off
     four numbers: the target ("initial") and trained ("final") global
     asymmetry_score, plus the per-node alignment between them.
@@ -105,7 +105,7 @@ def sweep_asymmetry_vs_k(X, omega, k_values, adjacency, epochs, neg, seed, verbo
     """
     out = {"initial": [], "final": [], "alignment": []}
     for k in k_values:
-        result = run_located_drift(X, omega, k=k, emb_k=k, neg=neg, epochs=epochs,
+        result = fdgl_pipeline(X, omega, k=k, emb_k=k, neg=neg, epochs=epochs,
                                     adjacency=adjacency, apply_step=True,
                                     force_model=force_model, fr_k=fr_k,
                                     negative_sampling=negative_sampling,
@@ -127,7 +127,7 @@ def per_node_preservation(X, omega, k, adjacency, epochs, neg, seed, min_initial
                            force_model="fr_gravity", fr_k=None, negative_sampling=False):
     """
     [OURS 2026-09-01] --mode distribution's core computation: ONE
-    run_located_drift call at a single k, then a per-node "% of target
+    fdgl_pipeline call at a single k, then a per-node "% of target
     asymmetry preserved" ratio -- pct_i = 100 * final_i / initial_i --
     instead of the sweep's single global mean-based ratio.
 
@@ -147,7 +147,7 @@ def per_node_preservation(X, omega, k, adjacency, epochs, neg, seed, min_initial
            "n_total": int, "n_valid": int, "n_excluded_nan": int,
            "n_excluded_near_zero": int}
     """
-    result = run_located_drift(X, omega, k=k, emb_k=k, neg=neg, epochs=epochs,
+    result = fdgl_pipeline(X, omega, k=k, emb_k=k, neg=neg, epochs=epochs,
                                 adjacency=adjacency, apply_step=True,
                                 force_model=force_model, fr_k=fr_k,
                                 negative_sampling=negative_sampling,
@@ -176,7 +176,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", choices=["sweep", "distribution"], default="sweep",
                     help="[OURS 2026-09-01] 'sweep' (default) = global asymmetry_score vs. k, "
-                         "one point per k. 'distribution' = per-node % preserved histogram at "
+                         "one point per k. 'distribution' = per-node %% preserved histogram at "
                          "ONE fixed k (--k).")
     p.add_argument("--dataset", choices=list(DATASET_GENERATORS.keys()), default="swiss_roll",
                     help="which of this project's 4 Randers-field datasets to use")
@@ -190,20 +190,20 @@ def main():
                     help="[--mode distribution only] number of histogram bins.")
     p.add_argument("--min-initial", type=float, default=1e-3,
                     help="[--mode distribution only] nodes with initial (target) per-node "
-                         "asymmetry below this are excluded from the % preserved histogram "
+                         "asymmetry below this are excluded from the %% preserved histogram "
                          "(dividing by ~0 target asymmetry is not meaningful) -- reported "
                          "separately, not silently dropped.")
     p.add_argument("--adjacency", choices=["knn", "threshold"], default="knn",
                     help="which SINGLE adjacency construction to use -- shown in the plot "
                          "title.")
     p.add_argument("--epochs", type=int, default=300,
-                    help="training epochs for each run_located_drift call -- --mode sweep "
+                    help="training epochs for each fdgl_pipeline call -- --mode sweep "
                          "trains once PER k (n_k_values total runs); --mode distribution "
                          "trains once, total.")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
                     help="[OURS 2026-09-02] attraction/repulsion law passed to "
-                         "run_located_drift/randers_umap_fit -- 'fr_gravity' (default) = "
+                         "fdgl_pipeline/fdgl_low_dim -- 'fr_gravity' (default) = "
                          "Bannister et al.'s spring/inverse-square law, 'umap' = UMAP's own "
                          "fitted (a,b)-curve. Applied at every k in --mode sweep, and at the "
                          "single --k in --mode distribution.")

@@ -2,8 +2,8 @@
 drift_magnitude_test.py -- per-epoch drift-magnitude monitor / sanity check.
 
 [OURS 2026-08-27]
-Standalone diagnostic (does not modify randers_umap.py, run_swiss_roll.py,
-run_mammoth.py, run_sphere_radial.py, run_sphere_tangential.py, or test.py)
+Standalone diagnostic (does not modify randers_fdgl.py, run_swiss_roll_generated.py,
+run_mammoth_generated.py, run_sphere_radial_generated.py, run_sphere_tangential_generated.py, or test.py)
 that tracks ||b_i|| epoch by epoch during training and checks it against the
 bound the pipeline is supposed to respect, for BOTH the frozen-B mechanism
 (--normalize off, the original clip_delta-based B_located) and the
@@ -12,9 +12,9 @@ from 2026-08-27 -- see fdgl_report.tex's "Drift Magnitude Normalization"
 section for the full derivation of both).
 
 Works across all four datasets that share the located-drift mechanism
-(swiss_roll, mammoth, sphere_radial, sphere_tangential -- run_mammoth.py/
-run_sphere_radial.py/run_sphere_tangential.py all import run_located_drift
-straight from run_swiss_roll.py rather than reimplementing it, and every
+(swiss_roll, mammoth, sphere_radial, sphere_tangential -- run_mammoth_generated.py/
+run_sphere_radial_generated.py/run_sphere_tangential_generated.py all import fdgl_pipeline
+straight from run_swiss_roll_generated.py rather than reimplementing it, and every
 make_*_randers() generator returns the same (X, omega, extra) triple, so a
 single small registry below is enough to dispatch to any of them; no
 per-dataset logic is duplicated). Not applicable to MNIST/BreastCancer --
@@ -22,8 +22,8 @@ those use the live-drift mechanism (B_fixed=None, use_drift=True,
 compute_drift's own N=_compute_N(D_asym) bound, |N|<=1), which has no
 locate step and no --normalize flag to compare against in the first place.
 
-Mechanism: runs run_swiss_roll.py's own run_located_drift() with
-snapshot_every=N (reusing the SAME snapshot machinery randers_umap_fit
+Mechanism: runs run_swiss_roll_generated.py's own fdgl_pipeline() with
+snapshot_every=N (reusing the SAME snapshot machinery fdgl_low_dim
 already has -- no new capture logic needed), reads ||b_i|| from every
 captured snapshot's B, and reports:
   - a per-epoch trajectory (mean/max ||b_i||), plotted for both mechanisms
@@ -62,19 +62,19 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# root where randers_bridge.py/run_swiss_roll_generated.py/etc. actually live --
 # added ROOT explicitly.
 sys.path.insert(0, str(ROOT))
 
-from run_swiss_roll import make_swiss_roll_randers
-from randers_bridge import run_located_drift
-from run_mammoth import make_mammoth_randers
-from run_sphere_radial import make_sphere_radial_randers
-from run_sphere_tangential import make_sphere_tangential_randers
+from run_swiss_roll_generated import make_swiss_roll_randers
+from randers_bridge import fdgl_pipeline
+from run_mammoth_generated import make_mammoth_randers
+from run_sphere_radial_generated import make_sphere_radial_randers
+from run_sphere_tangential_generated import make_sphere_tangential_randers
 
 # [OURS 2026-08-28] every make_*_randers() below has the same (n, seed=...)
-# -> (X, omega, extra) interface, and every run_*.py's own run_located_drift
-# is the SAME function (imported from run_swiss_roll.py, not reimplemented)
+# -> (X, omega, extra) interface, and every run_*.py's own fdgl_pipeline
+# is the SAME function (imported from run_swiss_roll_generated.py, not reimplemented)
 # -- so dispatching by name is enough, no per-dataset branching needed
 # anywhere else in this file.
 DATASET_MAKERS = {
@@ -89,11 +89,11 @@ def collect_norm_trajectory(X, omega, normalize, epochs, snapshot_every, k, emb_
                              clip_delta, seed, verbose):
     """
     Runs the located-drift pipeline once, returns the ||b_i|| trajectory
-    (mean/max/min per captured epoch) read straight from randers_umap_fit's
+    (mean/max/min per captured epoch) read straight from fdgl_low_dim's
     own snapshot_every mechanism -- no separate training loop, no
     duplicated logic.
     """
-    out = run_located_drift(X, omega, k=k, emb_k=emb_k, epochs=epochs,
+    out = fdgl_pipeline(X, omega, k=k, emb_k=emb_k, epochs=epochs,
                              clip_delta=clip_delta, snapshot_every=snapshot_every,
                              normalize_drift_by_asymmetry=normalize,
                              seed=seed, verbose=verbose)
@@ -139,7 +139,7 @@ def main():
     p.add_argument("--dataset", choices=sorted(DATASET_MAKERS.keys()), default="swiss_roll",
                     help="[OURS 2026-08-28] which dataset's make_*_randers() to run this "
                          "check against -- all four share the exact same located-drift "
-                         "mechanism (run_located_drift, imported from run_swiss_roll.py), "
+                         "mechanism (fdgl_pipeline, imported from run_swiss_roll_generated.py), "
                          "so the same check applies unchanged to any of them.")
     p.add_argument("--n", type=int, default=1000)
     p.add_argument("--k", type=int, default=15)

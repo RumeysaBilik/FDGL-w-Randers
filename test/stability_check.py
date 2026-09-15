@@ -3,11 +3,11 @@
 stability_check.py -- [OURS 2026-08-14, per UMAP paper Section 5.3
 "Embedding Stability"] measures how much our located-drift swiss-roll
 embedding changes as a function of sample size, using normalized
-Procrustes distance (randers_umap.py::procrustes_align).
+Procrustes distance (randers_fdgl.py::procrustes_align).
 
 Recipe (mirrors the paper's Figure 8 exactly, adapted to our setting):
     1. Generate the swiss roll ONCE at n_full points (X_full, omega_full, t_full).
-    2. Run the full located-drift pipeline (run_swiss_roll.py::run_located_drift)
+    2. Run the full located-drift pipeline (run_swiss_roll_generated.py::fdgl_pipeline)
        on the full n_full points -> Y_full.
     3. For each n_sub in --sub-sizes: take the FIRST n_sub points of
        X_full/omega_full (exact slice, not a fresh generation -- see note
@@ -48,13 +48,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# root where randers_bridge.py/run_swiss_roll_generated.py/etc. actually live --
 # added ROOT explicitly.
 sys.path.insert(0, str(ROOT))
 
-from run_swiss_roll import make_swiss_roll_randers
-from randers_bridge import run_located_drift
-from randers_umap import procrustes_align
+from run_swiss_roll_generated import make_swiss_roll_randers
+from randers_bridge import fdgl_pipeline
+from test import procrustes_align
 
 
 def main():
@@ -66,7 +66,7 @@ def main():
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--locate-epochs", type=int, default=500)
     p.add_argument("--ramp", action="store_true",
-                    help="ramp B_fixed's magnitude 0->1 (recommended, matches run_swiss_roll.py "
+                    help="ramp B_fixed's magnitude 0->1 (recommended, matches run_swiss_roll_generated.py "
                          "default recommendation for large/noisy n)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="stability_check")
@@ -80,7 +80,7 @@ def main():
 
     if not args.quiet:
         print(f"\n=== full run, n={args.n_full} ===")
-    result_full = run_located_drift(X_full, omega_full, k=args.k, emb_k=args.k,
+    result_full = fdgl_pipeline(X_full, omega_full, k=args.k, emb_k=args.k,
                                      neg=args.neg, locate_epochs=args.locate_epochs,
                                      epochs=args.epochs, ramp=args.ramp,
                                      seed=args.seed, verbose=not args.quiet)
@@ -95,7 +95,7 @@ def main():
             print(f"\n=== sub run, n={n_sub} ({n_sub/args.n_full:.1%} of full) ===")
         X_sub = X_full[:n_sub]
         omega_sub = omega_full[:n_sub]
-        result_sub = run_located_drift(X_sub, omega_sub, k=args.k, emb_k=args.k,
+        result_sub = fdgl_pipeline(X_sub, omega_sub, k=args.k, emb_k=args.k,
                                         neg=args.neg, locate_epochs=args.locate_epochs,
                                         epochs=args.epochs, ramp=args.ramp,
                                         seed=args.seed, verbose=not args.quiet)

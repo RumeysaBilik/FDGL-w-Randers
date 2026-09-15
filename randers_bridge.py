@@ -3,7 +3,7 @@ randers_bridge.py
 ==================
 Converts a raw point cloud X (n, m) plus a per-point Randers drift field
 omega (n, m) into a full (n, n) asymmetric geodesic distance matrix D_asym,
-suitable as direct input to randers_umap_fit().
+suitable as direct input to fdgl_low_dim().
 
 Construction (compute_dist_matrix)
 -----------------------------------
@@ -25,13 +25,12 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components, shortest_path
 from scipy.spatial.distance import cdist
 
-from randers_umap import randers_umap_fit, classical_mds
+from randers_fdgl import fdgl_low_dim, classical_mds
 
 
 def compute_dist_matrix(
         X,
         n_neighbors=5,
-        path_method="auto",
         metric="euclidean",
         randers_field=None,
         directed=None,
@@ -39,6 +38,11 @@ def compute_dist_matrix(
         return_adjacency=False,
 ):
     """
+    Shortest-path step always uses Dijkstra: every caller in this repo
+    builds a sparse, non-negative-weighted graph (clip_delta/the Randers
+    field's own ||omega||<1 constraint keeps every perturbed edge weight
+    positive), exactly what Dijkstra is for.
+
     Parameters
     ----------
     X             : (n, m) raw coordinates
@@ -50,14 +54,13 @@ def compute_dist_matrix(
                     n_neighbors nearest points; asymmetric in general
                     (edge (i,j) doesn't imply edge (j,i)), which is the
                     asymmetric-existence structure the drift signal
-                    (_compute_N in randers_umap.py) is meant to pick up on.
+                    (_compute_N in randers_fdgl.py) is meant to pick up on.
                     "threshold" -- connect i,j iff dist(i,j) < eps;
                     symmetric by construction.
     randers_field : (n, m) per-point drift vector omega_i, or None for the
                     plain Isomap-style geodesic distance
     directed      : bool or None. None (default): directed iff
                     randers_field is given, undirected otherwise.
-    path_method   : passed to scipy.sparse.csgraph.shortest_path
     return_adjacency : bool, default False. If True, also return `bln`,
                     the (n, n) boolean direct-neighbour mask (needed by
                     asymmetry_score(), since dense D_asym alone doesn't
@@ -137,7 +140,7 @@ def compute_dist_matrix(
     else:
         directed_ = False if directed is None else directed
 
-    dist_matrix_, preds_ = shortest_path(nbg, method=path_method, directed=directed_,
+    dist_matrix_, preds_ = shortest_path(nbg, method="D", directed=directed_,
                                           return_predecessors=True)
 
     if X.dtype == np.float32:
@@ -191,7 +194,7 @@ def asymmetry_score(D, bln=None):
 def reconstruct_rho(Y, B):
     """
     rho(i->j) = ||y_i-y_j|| + b_i.(y_j-y_i) -- same formula
-    randers_umap_fit's training loop uses, standalone here so
+    fdgl_low_dim's training loop uses, standalone here so
     asymmetry_score() can be run on the trained embedding's own
     reconstructed distances, not just the raw input D_asym.
     """
@@ -203,7 +206,7 @@ def reconstruct_rho(Y, B):
     return rho
 
 
-def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
+def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       epochs=500, clip_delta=0.01, use_gravity=False,
                       gravity_strength=1.0, gravity_neighbor_weight=True,
                       use_virtual_neighbor=False, proj_dim=2, adjacency="knn",
@@ -221,7 +224,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         step's D_asym).
 
     randers_attractive, randers_repulsive : bool, forwarded to
-        randers_umap_fit's same-named parameters (default: attractive=True,
+        fdgl_low_dim's same-named parameters (default: attractive=True,
         repulsive=False). D_geo (computed below from
         the same X/adjacency, randers_field=None) is always forwarded too,
         so switching either flag to False gets a correctly Euclidean-
@@ -229,7 +232,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
 
     proj_dim : int, default 2. Embedding dimension for both the locate
         step's placement (classical_mds) and the apply step's
-        randers_umap_fit call. 
+        fdgl_low_dim call. 
 
     STEP 1 locate : place n real + n virtual (x_i+omega_i) points with one
                     deterministic classical_mds call on D_sym_aug (no
@@ -240,7 +243,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                     epoch, b_i is never touched.
 
     snapshot_every : int or None. If given, forwarded to the apply step's
-        randers_umap_fit call only -- captures Y every snapshot_every
+        fdgl_low_dim call only -- captures Y every snapshot_every
         epochs, from Y_real0 through the final embedding, for a training
         trajectory plot.
 
@@ -249,7 +252,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         If True, B_located's direction stays fixed but its magnitude is
         replaced every epoch with that node's live distance to its own
         k-th nearest neighbour in the current embedding Y -- forwarded to
-        randers_umap_fit as scale_B_fixed_by_knn_distance (see its
+        fdgl_low_dim as scale_B_fixed_by_knn_distance (see its
         docstring for the exact mechanism).
 
     apply_step : bool, default True. If False, skip STEP 2 entirely -- no
@@ -271,7 +274,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
 
     if verbose:
         print(f"\nLocate: building symmetric geodesic D on {2*n} augmented points...")
-    D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k, path_method="auto",
+    D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k,
                                        randers_field=None, adjacency=adjacency)
 
     # One deterministic placement call, no training. locate_epochs is
@@ -302,13 +305,13 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     # ---- apply: real D_asym, B frozen + attached ----------------------------
     if verbose:
         print(f"\nApply: building asymmetric D_asym on the {n} real points...")
-    D_asym, _, bln_asym = compute_dist_matrix(X, n_neighbors=k, path_method="auto",
+    D_asym, _, bln_asym = compute_dist_matrix(X, n_neighbors=k,
                                     randers_field=omega, adjacency=adjacency,
                                     return_adjacency=True)
 
-    # D_geo -- drift-free counterpart of D_asym, used by randers_umap_fit
+    # D_geo -- drift-free counterpart of D_asym, used by fdgl_low_dim
     # when randers_attractive/randers_repulsive is False (see docstring).
-    D_geo, _ = compute_dist_matrix(X, n_neighbors=k, path_method="auto",
+    D_geo, _ = compute_dist_matrix(X, n_neighbors=k,
                                     randers_field=None, adjacency=adjacency)
 
     asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
@@ -317,7 +320,7 @@ def run_located_drift(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
               f"(mean |d_ij-d_ji|, in D_asym's own units, averaged over each "
               f"node's real neighbours, then over all nodes -- 0 = fully symmetric)")
 
-    out2 = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
+    out2 = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
                             n_epochs=epochs, use_drift=True, d=proj_dim,
                             B_fixed=B_located, Y_init_override=Y_real0,
                             use_gravity=use_gravity, gravity_strength=gravity_strength,

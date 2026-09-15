@@ -79,7 +79,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/randers_umap.py actually live -- added
+# root where randers_bridge.py/randers_fdgl.py actually live -- added
 # ROOT explicitly.
 sys.path.insert(0, ROOT)
 
@@ -89,15 +89,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from randers_bridge import compute_dist_matrix, asymmetry_score
-from randers_umap import randers_umap_fit
+from randers_fdgl import fdgl_low_dim
 
 
 # ─────────────────────────────────────────────────────────────────────────
 # data loaders
 # ─────────────────────────────────────────────────────────────────────────
 def make_swiss_roll(n, seed=42):
-    """Ported unchanged from run_swiss_roll.py's make_swiss_roll_randers."""
-    from run_swiss_roll import make_swiss_roll_randers
+    """Ported unchanged from run_swiss_roll_generated.py's make_swiss_roll_randers."""
+    from run_swiss_roll_generated import make_swiss_roll_randers
     return make_swiss_roll_randers(n, seed=seed)
 
 
@@ -125,7 +125,7 @@ def edge_length_stats(Y, knn_mask):
 def reconstruct_rho(Y, B):
     """
     rho(i->j) = ||y_i-y_j|| + b_i.(y_j-y_i) -- same formula
-    randers_umap_fit's own training loop and test.py/
+    fdgl_low_dim's own training loop and test.py/
     compare_live_vs_frozen_direction.py use, standalone here so
     asymmetry_score can be evaluated on the TRAINED embedding's own
     reconstructed distances, not just on the raw input D_asym.
@@ -165,7 +165,7 @@ def end_to_end_ratio(Y, t, mean_edge_len, frac=0.05):
 # ─────────────────────────────────────────────────────────────────────────
 def run_condition(D_asym, bln, args, force_model, label, extra):
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
+        out = fdgl_low_dim(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
                                 n_epochs=args.epochs, use_drift=True, B_fixed=None,
                                 clip_delta=args.clip_delta, ramp=False,
                                 seed=args.seed, verbose=not args.quiet,
@@ -224,7 +224,7 @@ def main():
         X, omega, t = make_swiss_roll(args.n, seed=42)
         y_color = t
         cmap = "viridis"
-        D_asym, _, bln = compute_dist_matrix(X, n_neighbors=args.k, path_method="auto",
+        D_asym, _, bln = compute_dist_matrix(X, n_neighbors=args.k,
                                               randers_field=omega, return_adjacency=True)
         extra = {"dataset": "swiss_roll", "t": t}
 

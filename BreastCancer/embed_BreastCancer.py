@@ -2,7 +2,7 @@
 """
 embed_BreastCancer.py -- applies our IsUMap + Randers-UMAP pipeline (same
 core mechanism as MNIST/embed_MNIST_raw.py: IsUMap's own distance_graph_
-generation for the asymmetric distance, our own randers_umap_fit for the
+generation for the asymmetric distance, our own fdgl_low_dim for the
 embedding, no PCA, no virtual points/class-centroid drift) to the Wisconsin
 Breast Cancer Diagnostic dataset (BreastCancerDataset.csv, 569 samples, 30
 real-valued features, binary diagnosis label M/B).
@@ -61,7 +61,7 @@ from matplotlib.lines import Line2D
 from sklearn.preprocessing import StandardScaler
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, arrow_scale
+from randers_fdgl import fdgl_low_dim, arrow_scale
 
 
 def load_breast_cancer_csv(path):
@@ -92,7 +92,7 @@ def main():
                     help="IsUMap's own distance_graph_generation neighbourhood size "
                          "(smaller than MNIST's default 30 -- dataset only has n=569)")
     p.add_argument("--emb-k", type=int, default=10,
-                    help="n_neighbors for our own randers_umap_fit's UMAP-style graph")
+                    help="n_neighbors for our own fdgl_low_dim's UMAP-style graph")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--snapshot-every", type=int, default=None,
@@ -113,7 +113,7 @@ def main():
                          "at full strength from epoch 0 (off by default, matching the "
                          "MNIST scripts' own --ramp convention).")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to fdgl_low_dim "
                          "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
                          "law, 'umap' = UMAP's own fitted (a,b)-curve.")
     p.add_argument("--fr-k", type=float, default=None,
@@ -180,9 +180,9 @@ def main():
     np.save(os.path.join(save_dir, "asymm_matrix_breastcancer.npy"), D_asym)
     np.save(os.path.join(save_dir, "labels_breastcancer.npy"), y)
 
-    # ---- embed with our own randers_umap_fit -------------------------------
+    # ---- embed with our own fdgl_low_dim -------------------------------
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
+        out = fdgl_low_dim(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
                                 n_epochs=args.epochs, use_drift=True,
                                 snapshot_every=args.snapshot_every,
                                 use_gravity=args.gravity,

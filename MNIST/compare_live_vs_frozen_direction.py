@@ -2,7 +2,7 @@
 """
 compare_live_vs_frozen_direction.py -- runs the SAME D_asym (IsUMap's own
 asymmetric distance, PCA-first exactly like embed_MNIST_pca.py) through
-randers_umap_fit TWICE at the same epoch count, differing ONLY in how B's
+fdgl_low_dim TWICE at the same epoch count, differing ONLY in how B's
 DIRECTION is handled:
 
   1. "live" (current default, B_fixed=None, use_drift=True): compute_drift()
@@ -11,11 +11,11 @@ DIRECTION is handled:
      embed_MNIST_pca.py/embed_MNIST_raw.py/embed_BreastCancer.py all use
      today.
   2. "frozen" (B_fixed): compute_drift() is called exactly ONCE, on the
-     untrained spectral_layout Y_init (same construction randers_umap_fit
+     untrained spectral_layout Y_init (same construction fdgl_low_dim
      would build internally), then that single (n,d) array is passed as
      B_fixed and never touched again for the rest of training -- direction
      AND magnitude both locked at their epoch-0 value. This is the exact
-     mechanism run_swiss_roll_isumap.py's locate_B_from_D_asym() implements
+     mechanism run_swiss_roll_calculated.py's locate_B_from_D_asym() implements
      (see that file for the full derivation/history) -- ported here
      unchanged, just applied to MNIST's own D_asym instead of swiss roll's.
 
@@ -23,7 +23,7 @@ DIRECTION is handled:
 
 Why the comparison is fair: D_asym itself is built ONCE and reused for both
 runs (same k, same distance_graph_generation call) -- the only thing that
-differs between the two randers_umap_fit calls is the B_fixed argument, so
+differs between the two fdgl_low_dim calls is the B_fixed argument, so
 any difference in the resulting embedding is attributable to the live-vs-
 frozen mechanism itself, not to any other confound.
 
@@ -65,7 +65,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, knn_mask_from_distance_matrix, classical_mds, compute_drift, arrow_scale
+from randers_fdgl import fdgl_low_dim, knn_mask_from_distance_matrix, classical_mds, compute_drift, arrow_scale
 
 
 def load_data(args):
@@ -109,7 +109,7 @@ def build_D_asym(X, k, verbose):
 
 def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     """
-    Ported from run_swiss_roll_isumap.py -- B derived ENTIRELY
+    Ported from run_swiss_roll_calculated.py -- B derived ENTIRELY
     from D_asym's own asymmetry (no ground truth involved anywhere), but
     computed ONCE on the untrained init and FROZEN, instead
     of live/per-epoch. See that file's own module docstring for the full
@@ -117,10 +117,10 @@ def locate_B_from_D_asym(D_asym, emb_k, clip_delta=0.01, seed=0, verbose=True):
     was settled on for a "frozen direction" comparison.
 
     [OURS 2026-09-03] Y_init now built via classical_mds (spectral_layout
-    has been removed project-wide -- see randers_umap.classical_mds's own
+    has been removed project-wide -- see randers_fdgl.classical_mds's own
     docstring). D_asym here is already dense/complete (build_D_asym runs a
     directed Dijkstra completion before this is ever called), so no extra
-    densifying step is needed the way run_swiss_roll_isumap.py's
+    densifying step is needed the way run_swiss_roll_calculated.py's
     isumap_style_init requires for its own (deliberately sparse) D_asym.
     """
     n = D_asym.shape[0]
@@ -172,7 +172,7 @@ def knn_purity(Y, y, k=10, seed=0):
 
 def run_condition(D_asym, X_shape0, args, B_fixed, label, y):
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
+        out = fdgl_low_dim(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
                                 n_epochs=args.epochs, use_drift=(B_fixed is None), B_fixed=B_fixed,
                                 clip_delta=args.clip_delta, ramp=False,
                                 seed=args.seed, verbose=not args.quiet)

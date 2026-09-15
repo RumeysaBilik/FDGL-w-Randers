@@ -3,7 +3,7 @@
 embed_scRNA.py -- applies our IsUMap + Randers-UMAP pipeline (same core
 mechanism as MNIST/embed_MNIST_pca.py and BreastCancer/embed_BreastCancer.py:
 IsUMap's own distance_graph_generation for the asymmetric distance, our own
-randers_umap_fit for the embedding, live drift B_fixed=None/use_drift=True)
+fdgl_low_dim for the embedding, live drift B_fixed=None/use_drift=True)
 to IsUMap's own bundled scRNA-seq example dataset (colorectal cancer mouse
 model, "CRCC_AKPE_scRNASeq_2024", from
 https://github.com/LUK4S-B/IsUMap/tree/main/Dataset_files/
@@ -82,7 +82,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from distance_graph_generation import distance_graph_generation
-from randers_umap import randers_umap_fit, arrow_scale
+from randers_fdgl import fdgl_low_dim, arrow_scale
 
 
 def load_scrna_csv(pca_path, cluster_path):
@@ -126,8 +126,8 @@ def main():
     p.add_argument("--n", type=int, default=2000,
                     help="[OURS 2026-08-28] subsample this many cells (random, seeded by "
                          "--seed) before running the pipeline. The real dataset has 11,505 "
-                         "cells -- randers_umap_fit's own dense (n,n,d) drift/gradient "
-                         "arrays (see compute_drift's docstring in randers_umap.py) scale "
+                         "cells -- fdgl_low_dim's own dense (n,n,d) drift/gradient "
+                         "arrays (see compute_drift's docstring in randers_fdgl.py) scale "
                          "as O(n^2), so n=11505 would need several GB of memory just for "
                          "those intermediate arrays; 2000-3000 is a reasonable default for "
                          "a single-machine run. Pass --n -1 to use every cell (only advisable "
@@ -136,7 +136,7 @@ def main():
                     help="IsUMap's own distance_graph_generation neighbourhood size "
                          "(matches the MNIST scripts' default)")
     p.add_argument("--emb-k", type=int, default=20,
-                    help="n_neighbors for our own randers_umap_fit's UMAP-style graph")
+                    help="n_neighbors for our own fdgl_low_dim's UMAP-style graph")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--snapshot-every", type=int, default=None,
@@ -158,7 +158,7 @@ def main():
                          "at full strength from epoch 0 (off by default, matching the "
                          "other run_*.py/embed_*.py scripts' own --ramp convention).")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to fdgl_low_dim "
                          "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
                          "law, 'umap' = UMAP's own fitted (a,b)-curve.")
     p.add_argument("--fr-k", type=float, default=None,
@@ -247,14 +247,14 @@ def main():
     np.save(os.path.join(save_dir, "asymm_matrix_scrna.npy"), D_asym)
     np.save(os.path.join(save_dir, "labels_scrna.npy"), y)
 
-    # ---- embed with our own randers_umap_fit -------------------------------
+    # ---- embed with our own fdgl_low_dim -------------------------------
     # Live drift, B_fixed=None -- same mechanism as MNIST/BreastCancer, and
     # per the 2026-08-28 discussion this is the CURRENT, explicitly-chosen
     # design for real (non-synthetic) datasets in this project, not a
     # frozen/located B (that hybrid was tried in the isumap scripts and
-    # explicitly reverted -- see run_swiss_roll_isumap.py's own comments).
+    # explicitly reverted -- see run_swiss_roll_calculated.py's own comments).
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
+        out = fdgl_low_dim(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
                                 n_epochs=args.epochs, use_drift=True, B_fixed=None,
                                 snapshot_every=args.snapshot_every,
                                 use_gravity=args.gravity,

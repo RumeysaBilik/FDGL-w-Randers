@@ -21,18 +21,18 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from randers_umap import randers_umap_fit, arrow_scale
+from randers_fdgl import fdgl_low_dim, arrow_scale
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--k", type=int, default=20, help="n_neighbors for randers_umap_fit")
+    p.add_argument("--k", type=int, default=20, help="n_neighbors for fdgl_low_dim")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--gravity", action="store_true",
                     help="add per-node gravity = b_i (no extra scaling)")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to fdgl_low_dim "
                          "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
                          "law, 'umap' = UMAP's own fitted (a,b)-curve.")
     p.add_argument("--fr-k", type=float, default=None,
@@ -52,7 +52,7 @@ def main():
     if not args.quiet:
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}")
 
-    out = randers_umap_fit(D_asym, n_neighbors=args.k, n_negative_samples=args.neg,
+    out = fdgl_low_dim(D_asym, n_neighbors=args.k, n_negative_samples=args.neg,
                             n_epochs=args.epochs, use_drift=True,
                             use_gravity=args.gravity,
                             force_model=args.force_model, fr_k=args.fr_k,

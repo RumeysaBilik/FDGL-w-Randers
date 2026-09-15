@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-run_mammoth.py -- Randers-UMAP on the mammoth point cloud (mammoth.csv) +
+run_mammoth_generated.py -- Randers-UMAP on the mammoth point cloud (mammoth.csv) +
 a hand-crafted Randers field, using the EXACT SAME pipeline as
-run_swiss_roll.py (run_located_drift, imported directly, not duplicated).
+run_swiss_roll_generated.py (fdgl_pipeline, imported directly, not duplicated).
 
 [OURS 2026-08-16] Only the dataset changes here: mammoth.csv (~1M raw points,
 subsampled) instead of the synthetic swiss roll. Everything downstream
 (D_asym construction via randers_bridge.compute_dist_matrix, the locate-
 then-attach B mechanism, the apply-step force-directed training) is
-identical to run_swiss_roll.py -- reused via import, not copy-pasted.
+identical to run_swiss_roll_generated.py -- reused via import, not copy-pasted.
 
 Randers field on mammoth
 -------------------------
@@ -29,8 +29,8 @@ NOT derived from local manifold geometry):
 
 Usage
 -----
-    python run_mammoth.py
-    python run_mammoth.py --n 1500 --epochs 500
+    python run_mammoth_generated.py
+    python run_mammoth_generated.py --n 1500 --epochs 500
 
 Outputs
 -------
@@ -51,8 +51,8 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from randers_bridge import run_located_drift
-from randers_umap import arrow_scale
+from randers_bridge import fdgl_pipeline
+from randers_fdgl import arrow_scale
 
 MAMMOTH_CSV = HERE / "mammoth.csv"
 
@@ -99,7 +99,7 @@ def main():
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--locate-epochs", type=int, default=500,
                     help="no-op -- locate step is a single deterministic placement call, no "
-                         "training. Kept for compat with run_swiss_roll.py's run_located_drift signature.")
+                         "training. Kept for compat with run_swiss_roll_generated.py's fdgl_pipeline signature.")
     p.add_argument("--clip-delta", type=float, default=0.01)
     p.add_argument("--gravity", action="store_true",
                     help="[OURS 2026-08-17] add per-node gravity toward xi_i=y_i+b_i "
@@ -110,7 +110,7 @@ def main():
                     help="[OURS 2026-08-20, default ON] each node's own virtual point "
                          "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
                          "neighbour, pulled with UMAP's own attraction curve -- see "
-                         "run_swiss_roll.py's --no-virtual-neighbor help for the full "
+                         "run_swiss_roll_generated.py's --no-virtual-neighbor help for the full "
                          "explanation. Pass this flag to DISABLE it.")
     p.add_argument("--snapshot-every", type=int, default=None)
     p.add_argument("--ramp", action="store_true")
@@ -119,13 +119,13 @@ def main():
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="[OURS 2026-08-20] embedding "
                          "dimension for the locate step's placement AND the apply "
-                         "step's force-directed training -- see run_swiss_roll.py's "
+                         "step's force-directed training -- see run_swiss_roll_generated.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
                     help="[OURS 2026-08-20, default flipped 2026-09-09] how "
                          "compute_dist_matrix builds its base adjacency graph -- see "
-                         "run_swiss_roll.py's --adjacency help / randers_bridge."
+                         "run_swiss_roll_generated.py's --adjacency help / randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation. 'knn' (default) = TRUE per-point "
                          "k-nearest-neighbours membership, asymmetric in general. "
@@ -137,10 +137,10 @@ def main():
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
                          "current embedding, keeping its DIRECTION as located. See "
-                         "randers_umap_fit's scale_B_fixed_by_knn_distance docstring "
+                         "fdgl_low_dim's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-31] see run_swiss_roll.py's --force-model help -- "
+                    help="[OURS 2026-08-31] see run_swiss_roll_generated.py's --force-model help -- "
                          "'fr_gravity' (NEW DEFAULT) = Bannister et al.'s own "
                          "Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -148,7 +148,7 @@ def main():
                     help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
                     help="[OURS 2026-08-31] only affects --force-model umap -- see "
-                         "run_swiss_roll.py's --neg-sampling help / randers_umap_fit's "
+                         "run_swiss_roll_generated.py's --neg-sampling help / fdgl_low_dim's "
                          "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="mammoth_embedding")
@@ -212,7 +212,7 @@ def main():
     if not args.quiet:
         print(f"wrote {args.out}_3d_drift_attached.png")
 
-    result = run_located_drift(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
                                locate_epochs=args.locate_epochs, epochs=args.epochs,
                                clip_delta=args.clip_delta, use_gravity=args.gravity,
                                snapshot_every=args.snapshot_every, ramp=args.ramp,

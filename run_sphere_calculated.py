@@ -1,35 +1,33 @@
 #!/usr/bin/env python3
 """
-run_mammoth_isumap.py -- isumap-derived D_asym + live-derived drift, on the
-mammoth point cloud. EXACT SAME pipeline as run_swiss_roll_isumap.py
-(build_isumap_dist_matrix imported directly, not duplicated) -- only the
+run_sphere_calculated.py -- sphere point cloud, but the distance matrix comes
+from distance_graph_generation() (the isumap method), NOT from
+randers_bridge.compute_dist_matrix() with an injected omega. EXACT SAME
+pipeline as run_swiss_roll_calculated.py / run_mammoth_calculated.py
+(build_isumap_dist_matrix, imported directly, not duplicated) -- only the
 dataset changes.
 
-See run_mammoth.py's module docstring for the mammoth Randers-field
-rationale (hand-crafted global-axis field, DAGES river/sea style -- no
-paper precedent exists for this dataset, neither IsUMap's nor DAGES's).
+Unlike run_sphere_tangential_generated.py / run_sphere_radial_generated.py, this script injects
+NO vector field at all: distance_graph_generation()'s asymmetry comes
+purely from the directed k-NN/star-graph structure of the raw point cloud
+X (make_sphere_points() -- no omega parameter exists in that function).
+The point of this script is the same as its swiss-roll/mammoth
+counterparts: does a drift signal recovered purely from an OBSERVED
+asymmetric dissimilarity matrix (no privileged access to any ground-truth
+field) still produce a sensible, drift-like embedding?
 
-[OURS 2026-08-18 -- see run_swiss_roll_isumap.py's module docstring for the
-full rationale, especially locate_B_from_D_asym()'s docstring] B is no
-longer located via virtual points that peeked at the
-mammoth's true omega field. Instead, B originates ENTIRELY from D_asym's
-own asymmetry (compute_drift on N = (D_asym-D_asym.T)/(D_asym+D_asym.T),
-no omega anywhere in that formula), but -- unlike a first attempt at this
-fix -- it is NOT recomputed every epoch. It is computed ONCE, on the
-untrained Y_init (spectral_layout on D_asym's own fuzzy graph), then frozen
-and attached to each node for the whole apply-step training, exactly like
-the old virtual-point mechanism used to do (just sourced from D_asym's
-asymmetry instead of from omega). omega is only used to build the
-mammoth's ambient point cloud + drift field in make_mammoth_randers(); it
-is never read again after that (D_asym here comes from
-distance_graph_generation, which has no randers_field parameter at all --
-its asymmetry is purely the directed k-NN/star-graph structure of X, not
-an injected vector field).
+[per the same 2026-08-18/19 back-and-forth documented in
+run_swiss_roll_calculated.py's module docstring] B is derived LIVE, every
+epoch, purely from D_asym's own asymmetry (compute_drift on
+N=(D_asym-D_asym.T)/(D_asym+D_asym.T), no omega anywhere) -- this is the
+final, reverted-to state for the other two isumap scripts, applied here
+from the start rather than going through the same locate-then-freeze
+detour.
 
 Usage
 -----
-    python run_mammoth_isumap.py
-    python run_mammoth_isumap.py --n 1500 --epochs 500
+    python run_sphere_calculated.py
+    python run_sphere_calculated.py --n 2000 --epochs 500
 """
 
 import argparse
@@ -44,15 +42,16 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from run_mammoth import make_mammoth_randers
+from run_sphere_tangential_generated import make_sphere_points
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
-from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
+from randers_fdgl import (fdgl_low_dim, arrow_scale, _compute_N,
                            compute_drift, knn_mask_from_distance_matrix)
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--n", type=int, default=5000)
+    p.add_argument("--radius", type=float, default=10.0)
     p.add_argument("--k", type=int, default=30, help="k for distance_graph_generation (isumap's own D_asym)")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
@@ -65,29 +64,28 @@ def main():
                     help="[OURS 2026-08-20, default ON] each node's own virtual point "
                          "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
                          "neighbour, pulled with UMAP's own attraction curve -- see "
-                         "randers_umap.py's use_virtual_neighbor docstring for the full "
+                         "randers_fdgl.py's use_virtual_neighbor docstring for the full "
                          "explanation. Pass this flag to DISABLE it.")
     p.add_argument("--clip-delta", type=float, default=0.01)
     p.add_argument("--fixed-drift", action="store_true",
                     help="[OURS 2026-09-10] derive B ONCE from D_asym's own asymmetry at "
                          "Y_init and FREEZE it for the whole run, instead of the default live "
                          "mechanism (B recomputed from the CURRENT Y every epoch) -- see "
-                         "run_swiss_roll_isumap.py's --fixed-drift help for the full "
+                         "run_swiss_roll_calculated.py's --fixed-drift help for the full "
                          "explanation. Off by default.")
     p.add_argument("--ramp", action="store_true")
     p.add_argument("--init-only", action="store_true",
                     help="stop before force-directed training -- runs a single epoch with an "
                          "internal epoch-0 snapshot and returns that pre-training state.")
     p.add_argument("--snapshot-every", type=int, default=None)
-    p.add_argument("--alpha", type=float, default=0.5, help="max ||omega|| for the mammoth drift field")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="[OURS 2026-08-20] embedding "
-                         "dimension for randers_umap_fit's own internal spectral "
-                         "init AND the apply-step training -- see run_swiss_roll.py's "
+                         "dimension for fdgl_low_dim's own internal spectral "
+                         "init AND the apply-step training -- see run_swiss_roll_generated.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28] see run_swiss_roll.py's "
+                    help="[OURS 2026-08-28] see run_swiss_roll_generated.py's "
                          "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
                          "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -95,10 +93,10 @@ def main():
                     help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
                     help="[OURS 2026-08-31] only affects --force-model umap -- see "
-                         "run_swiss_roll.py's --neg-sampling help / randers_umap_fit's "
+                         "run_swiss_roll_generated.py's --neg-sampling help / fdgl_low_dim's "
                          "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", default="mammoth_embedding_isumap")
+    p.add_argument("--out", default="sphere_embedding_isumap")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
 
@@ -106,8 +104,8 @@ def main():
     apply_snapshot_every = 1 if args.init_only else args.snapshot_every
 
     if not args.quiet:
-        print(f"Loading mammoth.csv, subsampling to n={args.n}")
-    X, omega, z = make_mammoth_randers(args.n, seed=42, alpha=args.alpha)
+        print(f"Generating sphere: n={args.n}, radius={args.radius}")
+    X, theta, phi = make_sphere_points(args.n, seed=42, radius=args.radius)
 
     if not args.quiet:
         print(f"\nBuilding distance matrix via distance_graph_generation (data_D, unfixed)...")
@@ -120,7 +118,7 @@ def main():
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
     # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- see
-    # run_swiss_roll_isumap.py's own docstring for the full rationale AND
+    # run_swiss_roll_calculated.py's own docstring for the full rationale AND
     # the bug-fix note: a plain (D_asym+D_asym.T)/2 average requires BOTH
     # directions finite, which made D_geo STRICTLY SPARSER than D_asym for
     # isumap's asymmetric-existence graphs (some rows ending up with zero
@@ -131,14 +129,9 @@ def main():
     D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
                       np.where(np.isfinite(D_asym), D_asym, D_asym.T))
 
-    # [OURS 2026-08-19] B is derived live, every epoch, purely from
-    # D_asym's own asymmetry, no omega. --init-only still shows a
-    # meaningful epoch-0 drift thanks to the 2026-08-19 fix in
-    # randers_umap.py's snapshot capture (computes the real epoch-0
-    # compute_drift(...) value instead of an all-zero placeholder).
     # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
-    # run_swiss_roll_isumap.py's isumap_style_init docstring), NOT
-    # randers_umap_fit's internal UMAP-style spectral_layout default.
+    # run_swiss_roll_calculated.py's isumap_style_init docstring), NOT
+    # fdgl_low_dim's internal UMAP-style spectral_layout default.
     if not args.quiet:
         print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
     Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
@@ -155,7 +148,7 @@ def main():
             print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
         B_fixed = None
 
-    out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
+    out = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                             n_epochs=apply_epochs, use_drift=True, B_fixed=B_fixed,
                             d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,
@@ -180,9 +173,9 @@ def main():
     if args.proj_dim == 3:
         fig = plt.figure(figsize=(10, 9))
         ax = fig.add_subplot(111, projection="3d")
-        sc = ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2], c=z, cmap="viridis", s=10,
+        sc = ax.scatter(Y[:, 0], Y[:, 1], Y[:, 2], c=theta, cmap="viridis", s=10,
                         alpha=0.85, linewidths=0)
-        fig.colorbar(sc, ax=ax, label="z (tail<->head)", shrink=0.6, pad=0.08)
+        fig.colorbar(sc, ax=ax, label="theta (colatitude)", shrink=0.6, pad=0.08)
         if bn.max() > 0:
             sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
@@ -194,8 +187,8 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")
     else:
         fig, ax = plt.subplots(figsize=(9, 8))
-        sc = ax.scatter(Y[:, 0], Y[:, 1], c=z, cmap="viridis", s=10, alpha=0.85, linewidths=0)
-        plt.colorbar(sc, ax=ax, label="z (tail<->head)")
+        sc = ax.scatter(Y[:, 0], Y[:, 1], c=theta, cmap="viridis", s=10, alpha=0.85, linewidths=0)
+        plt.colorbar(sc, ax=ax, label="theta (colatitude)")
         if bn.max() > 0:
             sc_scale = arrow_scale(Y, bn)
             ax.quiver(Y[big, 0], Y[big, 1], B[big, 0] * sc_scale, B[big, 1] * sc_scale,
@@ -205,11 +198,11 @@ def main():
     drift_label = ("frozen B (from D_asym asymmetry at Y_init only)" if args.fixed_drift
                    else "live B (from D_asym asymmetry only)")
     init_suffix = ", INIT ONLY (no training)" if args.init_only else f", epochs={args.epochs}"
-    ax.set_title(f"Randers-UMAP mammoth, isumap-derived D, {drift_label}{init_suffix}  (n={args.n})", fontsize=11)
+    ax.set_title(f"Randers-UMAP sphere, isumap-derived D, {drift_label}{init_suffix}  (n={args.n})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 
-    np.savez(f"{args.out}.npz", Y=Y, B=B, z=z, X=X, omega=omega)
+    np.savez(f"{args.out}.npz", Y=Y, B=B, theta=theta, phi=phi, X=X)
 
     if not args.quiet:
         print(f"\nwrote {args.out}.png and {args.out}.npz")
@@ -219,7 +212,7 @@ def main():
         n_snap = len(snaps)
         ncols = min(n_snap, 6)
         nrows = int(np.ceil(n_snap / ncols))
-        vmin, vmax = z.min(), z.max()
+        vmin, vmax = theta.min(), theta.max()
         sc2 = None
 
         if args.proj_dim == 3:
@@ -229,7 +222,7 @@ def main():
             for idx, snap in enumerate(snaps):
                 ax2 = axes2[idx]
                 Yi, Bi = snap["Y"], snap["B"]
-                sc2 = ax2.scatter(Yi[:, 0], Yi[:, 1], Yi[:, 2], c=z, cmap="viridis",
+                sc2 = ax2.scatter(Yi[:, 0], Yi[:, 1], Yi[:, 2], c=theta, cmap="viridis",
                                   s=6, alpha=0.85, linewidths=0, vmin=vmin, vmax=vmax)
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
@@ -248,7 +241,7 @@ def main():
             for idx, snap in enumerate(snaps):
                 ax2 = axes[idx // ncols][idx % ncols]
                 Yi, Bi = snap["Y"], snap["B"]
-                sc2 = ax2.scatter(Yi[:, 0], Yi[:, 1], c=z, cmap="viridis", s=6,
+                sc2 = ax2.scatter(Yi[:, 0], Yi[:, 1], c=theta, cmap="viridis", s=6,
                                   alpha=0.85, linewidths=0, vmin=vmin, vmax=vmax)
                 bni = np.linalg.norm(Bi, axis=1)
                 bigi = np.argsort(bni)[::-1][:200]
@@ -262,10 +255,10 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers-UMAP mammoth, isumap D, apply-step trajectory  (n={args.n}, "
+        fig2.suptitle(f"Randers-UMAP sphere, isumap D, apply-step trajectory  (n={args.n}, "
                       f"snapshot_every={args.snapshot_every})", fontsize=11)
         if sc2 is not None:
-            fig2.colorbar(sc2, ax=fig2.get_axes(), label="z (tail<->head)",
+            fig2.colorbar(sc2, ax=fig2.get_axes(), label="theta (colatitude)",
                           fraction=0.02, pad=0.01)
         fig2.savefig(f"{args.out}_snapshots.png", dpi=150, bbox_inches="tight")
 

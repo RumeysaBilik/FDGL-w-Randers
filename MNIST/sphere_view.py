@@ -3,7 +3,7 @@
 sphere_view.py -- [OURS 2026-09-10] MNIST-only visualization helper, used
 by embed_MNIST_raw.py's and embed_MNIST_pca.py's --sphere-view flag.
 
-Deliberately NOT in randers_umap.py: this is a pure post-training
+Deliberately NOT in randers_fdgl.py: this is a pure post-training
 VISUALIZATION transform (map a 2D embedding onto a unit sphere, same
 map-on-paper vs. map-on-a-globe idea), not part of the embedding
 algorithm itself, and currently only used by the two MNIST scripts -- so
@@ -19,7 +19,7 @@ def stereographic_project(Y2d: np.ndarray, center: np.ndarray = None,
     Map a 2D embedding onto the unit sphere via inverse stereographic
     projection -- the same map-on-paper vs. map-on-a-globe transform,
     applied purely for VISUALIZATION after training. Does not touch
-    randers_umap_fit or the force computation in any way; Y2d is whatever
+    fdgl_low_dim or the force computation in any way; Y2d is whatever
     a normal 2D run already produced.
 
         d^2 = x^2 + y^2                     (after centering + scaling)

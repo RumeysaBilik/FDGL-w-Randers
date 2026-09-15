@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_swiss_roll_isumap.py -- swiss roll, but the distance matrix comes from
+run_swiss_roll_calculated.py -- swiss roll, but the distance matrix comes from
 distance_graph_generation() (the isumap method used in asymm_dist_MNIST.py),
 NOT from randers_bridge.compute_dist_matrix().
 
@@ -51,7 +51,7 @@ principles are reconciled in locate_B_from_D_asym() (defined below):
 B is derived ENTIRELY from D_asym's own asymmetry (compute_drift(N,
 knn_mask, k, Y_init, clip_delta), N = (D_asym-D_asym.T)/(D_asym+D_asym.T),
 no omega anywhere), but the compute_drift() call happens exactly ONCE, on
-Y_init (the same untrained spectral_layout initialisation randers_umap_fit
+Y_init (the same untrained spectral_layout initialisation fdgl_low_dim
 would build internally) -- not per epoch. The result is frozen and passed
 as B_fixed, exactly like the old virtual-point mechanism used to do, just
 sourced from D_asym's asymmetry instead of from omega.
@@ -67,8 +67,8 @@ through a separately located B.
 
 Usage
 -----
-    python3 run_swiss_roll_isumap.py
-    python3 run_swiss_roll_isumap.py --n 2000 --epochs 500
+    python3 run_swiss_roll_calculated.py
+    python3 run_swiss_roll_calculated.py --n 2000 --epochs 500
 """
 
 import argparse
@@ -83,21 +83,21 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
+from randers_fdgl import (fdgl_low_dim, arrow_scale, _compute_N,
                            compute_drift, knn_mask_from_distance_matrix)
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
 
 
 def make_swiss_roll_randers(n, seed=42):
-    """[OURS 2026-09-15] Own copy, not imported from run_swiss_roll.py --
-    was previously `from run_swiss_roll import make_swiss_roll_randers`,
+    """[OURS 2026-09-15] Own copy, not imported from run_swiss_roll_generated.py --
+    was previously `from run_swiss_roll_generated import make_swiss_roll_randers`,
     which meant this file's dataset depended on another run_*.py script's
     module. Both files are effectively unrelated pipelines (Generated vs
     Calculated) that happen to want the same swiss-roll point cloud +
     ground-truth omega for comparison -- keeping a cross-import between
     them just for this one shared generator wasn't worth the coupling.
     Exact construction from generated_swiss_roll-2.py, parameterised by n
-    -- identical to run_swiss_roll.py's own copy, kept in sync by hand if
+    -- identical to run_swiss_roll_generated.py's own copy, kept in sync by hand if
     either ever changes."""
     rng = np.random.RandomState(seed)
 
@@ -126,8 +126,8 @@ def make_swiss_roll_randers(n, seed=42):
 
 # [OURS 2026-09-08] locate_B_from_D_asym() (the frozen-B alternative to the
 # live mechanism main() actually runs) removed -- confirmed dead code, never
-# called anywhere in this file, run_mammoth_isumap.py, run_sphere_isumap.py,
-# or asymmetry_k_sweep_isumap.py (only imported by run_mammoth_isumap.py,
+# called anywhere in this file, run_mammoth_calculated.py, run_sphere_calculated.py,
+# or asymmetry_k_sweep_isumap.py (only imported by run_mammoth_calculated.py,
 # itself never invoked there either). The live/frozen comparison this
 # function was for still exists and is actively used, just as its own
 # separate copy in MNIST/compare_live_vs_frozen_direction.py -- that one is
@@ -149,7 +149,7 @@ def main():
                     help="[OURS 2026-08-20, default ON] each node's own virtual point "
                          "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
                          "neighbour, pulled with UMAP's own attraction curve -- see "
-                         "randers_umap.py's use_virtual_neighbor docstring for the full "
+                         "randers_fdgl.py's use_virtual_neighbor docstring for the full "
                          "explanation. Pass this flag to DISABLE it.")
     p.add_argument("--clip-delta", type=float, default=0.01)
     p.add_argument("--fixed-drift", action="store_true",
@@ -168,11 +168,11 @@ def main():
     p.add_argument("--ramp", action="store_true",
                     help="[OURS 2026-08-12] ramp B's magnitude 0->1 over the first 70%% of "
                          "epochs instead of applying it at full strength from epoch 0 "
-                         "(default: off, matching run_swiss_roll.py -- B is located/computed "
+                         "(default: off, matching run_swiss_roll_generated.py -- B is located/computed "
                          "once and attached at full strength from the start).")
     p.add_argument("--init-only", action="store_true",
                     help="[OURS 2026-08-13] stop before force-directed training -- isumap has no "
-                         "explicit separate Y_init step (randers_umap_fit computes its own spectral "
+                         "explicit separate Y_init step (fdgl_low_dim computes its own spectral "
                          "init on D_asym internally), so this runs a single epoch with an internal "
                          "epoch-0 snapshot and returns that pre-training state instead of out['Y']/"
                          "out['B']. Ignores --epochs, --ramp, --gravity.")
@@ -182,12 +182,12 @@ def main():
                          "Ignored if --init-only is also given.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
                     help="[OURS 2026-08-20] embedding "
-                         "dimension for randers_umap_fit's own internal spectral "
-                         "init AND the apply-step training -- see run_swiss_roll.py's "
+                         "dimension for fdgl_low_dim's own internal spectral "
+                         "init AND the apply-step training -- see run_swiss_roll_generated.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28] see run_swiss_roll.py's "
+                    help="[OURS 2026-08-28] see run_swiss_roll_generated.py's "
                          "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
                          "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
@@ -195,7 +195,7 @@ def main():
                     help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
                     help="[OURS 2026-08-31] only affects --force-model umap -- see "
-                         "run_swiss_roll.py's --neg-sampling help / randers_umap_fit's "
+                         "run_swiss_roll_generated.py's --neg-sampling help / fdgl_low_dim's "
                          "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="swiss_embedding_isumap")
@@ -203,7 +203,7 @@ def main():
     args = p.parse_args()
 
     # [OURS 2026-08-13] init-only: run just 1 epoch with a snapshot_every=1 so
-    # randers_umap_fit's guaranteed pre-loop epoch-0 capture gives us the raw
+    # fdgl_low_dim's guaranteed pre-loop epoch-0 capture gives us the raw
     # spectral Y_init + B (at ramp's epoch-0 value) without any real training.
     apply_epochs = 1 if args.init_only else args.epochs
     apply_snapshot_every = 1 if args.init_only else args.snapshot_every
@@ -230,9 +230,9 @@ def main():
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
     # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- the Euclidean-consistent
-    # weight source for randers_umap_fit's A_geo (see its own weight-
+    # weight source for fdgl_low_dim's A_geo (see its own weight-
     # consistency-fix docstring). In the isomap-style pipeline
-    # (run_swiss_roll.py) D_geo is "the same D_asym construction with
+    # (run_swiss_roll_generated.py) D_geo is "the same D_asym construction with
     # randers_field=None" -- but distance_graph_generation has no field
     # parameter at all: this pipeline's asymmetry isn't injected by a
     # field, it's the raw k-NN structural asymmetry that real IsUMap's own
@@ -264,11 +264,11 @@ def main():
     # but ONCE and frozen; that hybrid was tried and then explicitly
     # reverted in favour of this live version. The epoch-0 snapshot
     # (--init-only reads this) is NOT an empty placeholder despite B_fixed
-    # being None: see the 2026-08-19 fix in randers_umap.py's snapshot
+    # being None: see the 2026-08-19 fix in randers_fdgl.py's snapshot
     # capture, which computes the real epoch-0 compute_drift(...) value
     # there specifically so --init-only still shows a meaningful drift.
     # [OURS 2026-09-03] init: real IsUMap's own cMDS choice
-    # (isumap_style_init, see its docstring above), NOT randers_umap_fit's
+    # (isumap_style_init, see its docstring above), NOT fdgl_low_dim's
     # internal UMAP-style spectral_layout default -- so the ONLY thing this
     # script still borrows from UMAP is the attractive/repulsive force
     # computation itself, per the advisor-facing goal of this "_isumap"
@@ -281,7 +281,7 @@ def main():
     # [OURS 2026-09-10] --fixed-drift: derive B ONCE from D_asym's own
     # asymmetry at Y_init, then freeze it for the whole run -- see the flag's
     # own help text above. B_fixed=None (default) keeps the live mechanism
-    # (randers_umap_fit recomputes B every epoch from the CURRENT Y).
+    # (fdgl_low_dim recomputes B every epoch from the CURRENT Y).
     if args.fixed_drift:
         if not args.quiet:
             print(f"\nDeriving B ONCE from D_asym's own asymmetry at Y_init, then freezing it "
@@ -294,7 +294,7 @@ def main():
             print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
         B_fixed = None
 
-    out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
+    out = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                             n_epochs=apply_epochs, use_drift=True, B_fixed=B_fixed,
                             d=args.proj_dim, Y_init_override=Y_init,
                             clip_delta=args.clip_delta,

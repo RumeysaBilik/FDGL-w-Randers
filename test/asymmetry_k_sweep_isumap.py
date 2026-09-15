@@ -3,9 +3,9 @@
 asymmetry_k_sweep_isumap.py -- [OURS 2026-09-07] isumap-flavored counterpart
 of asymmetry_k_sweep.py. Computes EXACTLY the same two quantities (global
 asymmetry_score vs. k, and per-node % preservation at a fixed k), but built
-on the isumap pipeline (run_swiss_roll_isumap.py's build_isumap_dist_matrix
-+ isumap_style_init + live-drift randers_umap_fit) instead of
-randers_bridge.run_located_drift.
+on the isumap pipeline (run_swiss_roll_calculated.py's build_isumap_dist_matrix
++ isumap_style_init + live-drift fdgl_low_dim) instead of
+randers_bridge.fdgl_pipeline.
 
 This is a SEPARATE file, not a --isumap flag bolted onto the original,
 because the two pipelines diverge in ways that don't collapse into shared
@@ -14,7 +14,7 @@ own distance_graph_generation has no knn/threshold switch), D_asym can be
 sparse/inf-filled with a k that gets clipped down to emb_k per-dataset
 (build_isumap_dist_matrix's own row-sparsity guard), and B is always the
 LIVE mechanism (B_fixed=None, use_drift=True) -- matching what
-run_swiss_roll_isumap.py's own main() actually runs (see that file's
+run_swiss_roll_calculated.py's own main() actually runs (see that file's
 docstring: the frozen locate_B_from_D_asym() alternative is defined there
 but never called).
 
@@ -49,16 +49,16 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# root where randers_bridge.py/run_swiss_roll_generated.py/etc. actually live --
 # added ROOT explicitly.
 sys.path.insert(0, str(ROOT))
 
-from randers_bridge import asymmetry_score, asymmetry_score_from_raw, reconstruct_rho
-from randers_umap import randers_umap_fit
+from randers_bridge import asymmetry_score, reconstruct_rho
+from randers_fdgl import fdgl_low_dim
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
-from run_swiss_roll import make_swiss_roll_randers
-from run_mammoth import make_mammoth_randers
-from run_sphere_tangential import make_sphere_points
+from run_swiss_roll_generated import make_swiss_roll_randers
+from run_mammoth_generated import make_mammoth_randers
+from run_sphere_tangential_generated import make_sphere_points
 
 # [OURS 2026-09-07] unlike asymmetry_k_sweep.py's DATASET_GENERATORS, these
 # don't need to share a return signature -- only the first element (X) is
@@ -90,19 +90,19 @@ def run_isumap_asymmetry(X, k, epochs, neg, seed, proj_dim=2,
                           negative_sampling=False, ramp=False, verbose=False):
     """
     [OURS 2026-09-07] The isumap-pipeline counterpart of
-    randers_bridge.run_located_drift's asymmetry-relevant computation --
+    randers_bridge.fdgl_pipeline's asymmetry-relevant computation --
     builds D_asym the isumap way, trains via the LIVE drift mechanism (the
-    same one run_swiss_roll_isumap.py's main() actually runs), and computes
+    same one run_swiss_roll_calculated.py's main() actually runs), and computes
     the same four asymmetry quantities via the same asymmetry_score()/
     reconstruct_rho() functions the main pipeline uses, so the numbers are
     directly comparable across the two pipelines.
 
-    ramp defaults to False here (not randers_umap_fit's own internal default
+    ramp defaults to False here (not fdgl_low_dim's own internal default
     of True), matching every other run_*.py/embed_*.py script's own
     --ramp convention (off by default, explicit opt-in) and randers_bridge.
-    run_located_drift's own default -- this file previously omitted `ramp`
-    entirely from the randers_umap_fit call below, which silently pulled in
-    randers_umap_fit's internal ramp=True (zeroing out B/asymmetry for the
+    fdgl_pipeline's own default -- this file previously omitted `ramp`
+    entirely from the fdgl_low_dim call below, which silently pulled in
+    fdgl_low_dim's internal ramp=True (zeroing out B/asymmetry for the
     first 30% of epochs, full strength only after 70%) with no way to turn
     it off from the CLI. [OURS 2026-09-08, fixed]
 
@@ -113,13 +113,13 @@ def run_isumap_asymmetry(X, k, epochs, neg, seed, proj_dim=2,
     """
     D_asym = build_isumap_dist_matrix(X, k=k, verbose=False)
 
-    # [OURS, ported from run_swiss_roll_isumap.py's main()] some rows can
+    # [OURS, ported from run_swiss_roll_calculated.py's main()] some rows can
     # have fewer real (finite) neighbours than the requested k -- clip.
     min_real_neighbors = int(np.isfinite(D_asym).sum(axis=1).min() - 1)
     emb_k = min(k, max(min_real_neighbors, 1))
 
     # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- see
-    # run_swiss_roll_isumap.py's own docstring for the full rationale AND
+    # run_swiss_roll_calculated.py's own docstring for the full rationale AND
     # the bug-fix note: a plain (D_asym+D_asym.T)/2 average requires BOTH
     # directions finite, which made D_geo STRICTLY SPARSER than D_asym for
     # isumap's asymmetric-existence graphs (some rows ending up with zero
@@ -130,24 +130,25 @@ def run_isumap_asymmetry(X, k, epochs, neg, seed, proj_dim=2,
     D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
                       np.where(np.isfinite(D_asym), D_asym, D_asym.T))
 
-    # [OURS 2026-09-07] asymmetry_score_from_raw, not asymmetry_score(D_asym,
-    # bln) directly -- D_asym is sparse (~k entries/row), and a real edge
-    # (i,j) with D_asym[i,j] finite can easily have D_asym[j,i]=inf (j is
-    # one of i's k-NN without i being one of j's), which would blow
-    # |D[i,j]-D[j,i]| up to inf. asymmetry_score_from_raw exists in
-    # randers_bridge.py precisely for this (it completes D_asym via a
-    # directed shortest_path internally, purely for scoring, without
-    # touching what's actually fed to training) but was, until now, never
-    # actually called anywhere in the project. bln reconstructed the same
-    # way that function builds it internally, so the "final" score below
-    # (on the always-dense rho_final) uses the identical real-edge set.
-    asym_per_node, asym_global = asymmetry_score_from_raw(D_asym)
+    # [OURS 2026-09-07, merged into asymmetry_score() 2026-09-15] call
+    # asymmetry_score(D_asym) with bln OMITTED (not asymmetry_score(D_asym,
+    # bln_asym) with it given) -- D_asym is sparse (~k entries/row), and a
+    # real edge (i,j) with D_asym[i,j] finite can easily have D_asym[j,i]=inf
+    # (j is one of i's k-NN without i being one of j's), which would blow
+    # |D[i,j]-D[j,i]| up to inf if scored directly. Leaving bln=None makes
+    # asymmetry_score take its raw/sparse path: derive bln from D_asym's own
+    # isfinite mask, complete D_asym via a directed shortest_path internally
+    # (purely for scoring, without touching what's actually fed to
+    # training), then score. bln reconstructed the same way below, so the
+    # "final" score (on the always-dense rho_final) uses the identical
+    # real-edge set.
+    asym_per_node, asym_global = asymmetry_score(D_asym)
     n = D_asym.shape[0]
     bln_asym = np.isfinite(D_asym) & ~np.eye(n, dtype=bool)
 
     Y_init = isumap_style_init(D_asym, d=proj_dim, seed=seed)
 
-    out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
+    out = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
                             n_epochs=epochs, use_drift=True, B_fixed=None,
                             d=proj_dim, Y_init_override=Y_init,
                             seed=seed, verbose=verbose,
@@ -231,7 +232,7 @@ def main():
                     help="[--mode distribution only] number of histogram bins.")
     p.add_argument("--min-initial", type=float, default=1e-3,
                     help="[--mode distribution only] nodes with initial per-node "
-                         "asymmetry below this are excluded from the % preserved histogram.")
+                         "asymmetry below this are excluded from the %% preserved histogram.")
     p.add_argument("--epochs", type=int, default=300)
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity")
@@ -242,7 +243,7 @@ def main():
                          "epochs (0 for the first 30%%, linear 30-70%%, full strength after) "
                          "instead of applying it at full strength from epoch 0. Off by "
                          "default -- matches every other run_*.py/embed_*.py script's own "
-                         "--ramp convention, deliberately overriding randers_umap_fit's own "
+                         "--ramp convention, deliberately overriding fdgl_low_dim's own "
                          "internal default of ramp=True.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", type=str, default=None,

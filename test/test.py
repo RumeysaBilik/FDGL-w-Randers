@@ -1,5 +1,5 @@
 """
-test.py -- diagnostics for the swiss-roll located-drift pipeline (run_swiss_roll.py).
+test.py -- diagnostics for the swiss-roll located-drift pipeline (run_swiss_roll_generated.py).
 
 Pulls the swiss-roll + Randers-field data itself (no separate data file
 needed), runs the located-drift mechanism (gravity off, then on, for
@@ -11,7 +11,7 @@ comparison), and reports three checks:
      D_asym, generic, same formula as the migration project's test.py
      (that file relied on finsler_mds.py's finsler_distances_freeB for the
      reconstruction step; reconstruct_rho() below is the same formula,
-     just inlined since randers_umap.py has no equivalent standalone
+     just inlined since randers_fdgl.py has no equivalent standalone
      function).
   3. direction_accuracy_swiss -- NEW, swiss-roll-specific. The migration
      project's direction_accuracy() needed ground truth F_true, an (n,n)
@@ -43,12 +43,12 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 # [OURS 2026-09-15] this file now lives in test/, not flat in the FDGL
-# root where randers_bridge.py/run_swiss_roll.py/etc. actually live --
+# root where randers_bridge.py/run_swiss_roll_generated.py/etc. actually live --
 # added ROOT explicitly.
 sys.path.insert(0, str(ROOT))
 
-from run_swiss_roll import make_swiss_roll_randers
-from randers_bridge import run_located_drift
+from run_swiss_roll_generated import make_swiss_roll_randers
+from randers_bridge import fdgl_pipeline
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ def stress(D_target: np.ndarray, D_reconstructed: np.ndarray) -> float:
 
 def reconstruct_rho(Y: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
-    rho_{i->j} = ||y_i-y_j|| + b_i . (y_j-y_i)   -- same formula randers_umap.py's
+    rho_{i->j} = ||y_i-y_j|| + b_i . (y_j-y_i)   -- same formula randers_fdgl.py's
     own training loop uses, standalone here so stress() can compare it
     against D_asym after training.
     """
@@ -152,11 +152,67 @@ def direction_accuracy_swiss(Y: np.ndarray, B: np.ndarray, t: np.ndarray,
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 4. Standalone report
+# 4. Embedding-quality helpers (moved from randers_fdgl.py -- not used by
+#    fdgl_low_dim itself, only by evaluation/diagnostic code like this)
+# ─────────────────────────────────────────────────────────────────────────
+def extent(Y: np.ndarray) -> float:
+    """Max distance from the embedding's own centroid -- a simple, honest
+    proxy for how spread out/degenerate the layout is."""
+    return float(np.linalg.norm(Y - Y.mean(axis=0), axis=1).max())
+
+
+def alignment(Y: np.ndarray, Y_baseline: np.ndarray, B: np.ndarray) -> float:
+    """
+    Mean cosine similarity between each node's displacement vs the
+    drift-off baseline and its own final b_i. Measures "was a force
+    applied", not "is the embedding better" -- not evidence of a better map.
+    """
+    disp = Y - Y_baseline
+    disp_norm = np.linalg.norm(disp, axis=1, keepdims=True)
+    b_norm = np.linalg.norm(B, axis=1, keepdims=True)
+    valid = (disp_norm[:, 0] > 1e-9) & (b_norm[:, 0] > 1e-9)
+    if not valid.any():
+        return float("nan")
+    cos = (disp[valid] * B[valid]).sum(1) / (disp_norm[valid, 0] * b_norm[valid, 0])
+    return float(cos.mean())
+
+
+def procrustes_align(X: np.ndarray, Y: np.ndarray):
+    """
+    Optimal translation + uniform scaling + rotation of Y onto X (same
+    n points, known correspondence) -- orthogonal Procrustes: center
+    both, SVD-fit rotation R minimising ||X_c-Y_c R||^2, closed-form
+    scale s, re-add X's centroid, report the normalised RMS residual.
+
+    Returns Y_aligned (n,d) and distance (float, 0 = identical shape).
+    """
+    X = np.asarray(X, dtype=np.float64)
+    Y = np.asarray(Y, dtype=np.float64)
+    X_mean = X.mean(axis=0)
+    Xc = X - X_mean
+    Yc = Y - Y.mean(axis=0)
+
+    U, _, Vt = np.linalg.svd(Yc.T @ Xc)
+    R = U @ Vt                                    # optimal rotation
+
+    Y_rot = Yc @ R
+    denom = float((Y_rot ** 2).sum())
+    s = float((Xc * Y_rot).sum() / denom) if denom > 1e-12 else 1.0  # optimal scale
+
+    Y_aligned = s * Y_rot + X_mean
+
+    resid = np.linalg.norm(X - Y_aligned, axis=1)
+    norm = float(np.linalg.norm(Xc, axis=1).mean()) + 1e-12
+    distance = float(np.sqrt((resid ** 2).mean()) / norm)
+    return Y_aligned, distance
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 5. Standalone report
 # ─────────────────────────────────────────────────────────────────────────
 def evaluate(label, X, omega, t, alpha, args, use_gravity):
     print(f"\n{'='*60}\n{label}\n{'='*60}")
-    result = run_located_drift(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
                                locate_epochs=args.locate_epochs, epochs=args.epochs,
                                clip_delta=args.clip_delta, use_gravity=use_gravity,
                                seed=args.seed, verbose=not args.quiet)

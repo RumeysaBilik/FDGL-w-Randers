@@ -14,7 +14,7 @@ a linear PCA projection from the raw 784-dim pixel space down to
 sees the data. Everything else -- which asymmetry mechanism is used
 (IsUMap's own local, pre-symmetrization neighbourhood metric, exactly as
 in asymm_dist_MNIST.py/distance_graph_generation.py), and which embedding
-method reads that D_asym (our own randers_umap_fit, exactly as in
+method reads that D_asym (our own fdgl_low_dim, exactly as in
 embed_MNIST.py) -- is UNCHANGED, so this is a controlled comparison against
 the existing 784-dim pipeline: only the ambient dimensionality the
 asymmetry is computed FROM differs, not the mechanism itself.
@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 # [OURS 2026-08-26] both the MNIST/ folder (this script's own dir) and the
 # FDGL root (where data_and_plots.py, distance_graph_generation.py and
-# randers_umap.py actually live) need to be importable -- the existing
+# randers_fdgl.py actually live) need to be importable -- the existing
 # asymm_dist_MNIST.py only added HERE (MNIST/) to sys.path, which does NOT
 # resolve those root-level modules and fails with "No module named
 # 'data_and_plots'" when run from anywhere except a shell already cd'd into
@@ -63,7 +63,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
 from data_and_plots import load_MNIST
-from randers_umap import (randers_umap_fit, arrow_scale, _compute_N,
+from randers_fdgl import (fdgl_low_dim, arrow_scale, _compute_N,
                            compute_drift, knn_mask_from_distance_matrix)
 from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
 from sphere_view import stereographic_project
@@ -82,18 +82,18 @@ def main():
                     help="IsUMap's own distance_graph_generation neighbourhood size "
                          "(matches asymm_dist_MNIST.py's default)")
     p.add_argument("--emb-k", type=int, default=20,
-                    help="n_neighbors for our own randers_umap_fit's UMAP-style graph")
+                    help="n_neighbors for our own fdgl_low_dim's UMAP-style graph")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--snapshot-every", type=int, default=None,
                     help="[OURS 2026-08-26] if given, also save <out>_snapshots.png: the "
                          "embedding every N epochs (from init to final), side by side -- "
-                         "same mechanism as run_swiss_roll.py's --snapshot-every.")
+                         "same mechanism as run_swiss_roll_generated.py's --snapshot-every.")
     p.add_argument("--gravity", action="store_true",
                     help="[OURS 2026-08-26] add per-node gravity toward xi_i=y_i+b_i "
                          "(Bannister et al. f_g=gamma*M[i]*b_i), weighted by "
                          "--gravity-neighbor-weight unless disabled. Same mechanism as "
-                         "run_swiss_roll.py's --gravity -- works here too since B is live "
+                         "run_swiss_roll_generated.py's --gravity -- works here too since B is live "
                          "(use_drift=True), not just when B is a frozen locate result.")
     p.add_argument("--gravity-strength", type=float, default=1.0,
                     help="[OURS 2026-08-26] gamma in Bannister et al.'s gravity force. "
@@ -106,30 +106,30 @@ def main():
                     help="[OURS 2026-09-10, default ON] each node's own virtual point "
                          "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
                          "neighbour, pulled with UMAP's own attraction curve -- see "
-                         "randers_umap.py's use_virtual_neighbor docstring, and "
-                         "run_mammoth_isumap.py's own --no-virtual-neighbor flag (same "
+                         "randers_fdgl.py's use_virtual_neighbor docstring, and "
+                         "run_mammoth_calculated.py's own --no-virtual-neighbor flag (same "
                          "mechanism, same default) for the full explanation. Previously this "
                          "file never passed use_virtual_neighbor at all, silently falling back "
-                         "to randers_umap_fit's own default (False) instead of matching the "
+                         "to fdgl_low_dim's own default (False) instead of matching the "
                          "rest of the isumap family -- fixed. Pass this flag to DISABLE it.")
     p.add_argument("--fixed-drift", action="store_true",
                     help="[OURS 2026-09-10] derive B ONCE from D_asym's own asymmetry at "
                          "Y_init and FREEZE it for the whole run, instead of the default live "
                          "mechanism (B recomputed from the CURRENT Y every epoch) -- see "
-                         "run_swiss_roll_isumap.py's --fixed-drift help for the full "
+                         "run_swiss_roll_calculated.py's --fixed-drift help for the full "
                          "explanation. Off by default.")
     p.add_argument("--ramp", action="store_true",
                     help="[OURS 2026-08-26] ramp drift's magnitude 0->1 over epochs instead "
                          "of applying it at full strength from epoch 0 (default here, "
-                         "matching run_swiss_roll.py's own --ramp convention -- off by "
+                         "matching run_swiss_roll_generated.py's own --ramp convention -- off by "
                          "default). When on: drift held at exactly 0 for the first 30%% of "
                          "epochs, linearly ramped 0->1 over the next 40%%, full strength for "
-                         "the last 30%% (randers_umap_fit's own schedule). Without this flag, "
-                         "randers_umap_fit's own internal default (ramp=True) would otherwise "
+                         "the last 30%% (fdgl_low_dim's own schedule). Without this flag, "
+                         "fdgl_low_dim's own internal default (ramp=True) would otherwise "
                          "apply silently -- passing ramp=args.ramp here makes it explicit and "
                          "off by default, consistent with the other run_*.py scripts.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to randers_umap_fit "
+                    help="[OURS 2026-09-02] attraction/repulsion law passed to fdgl_low_dim "
                          "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
                          "law, 'umap' = UMAP's own fitted (a,b)-curve. Was previously only "
                          "exposed on the swiss_roll/mammoth/sphere/isumap scripts, not here.")
@@ -139,14 +139,14 @@ def main():
     p.add_argument("--neg-sampling", action="store_true",
                     help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
                          "(n_negative_samples random points per node, drawn fresh every epoch) "
-                         "instead of the dense/exact sum. See randers_umap_fit's own "
+                         "instead of the dense/exact sum. See fdgl_low_dim's own "
                          "negative_sampling docstring for the exact mechanism and rescaling.")
     p.add_argument("--sphere-view", action="store_true",
                     help="[OURS 2026-09-10] also save <out>_sphere.png: the trained 2D embedding "
                          "mapped onto a unit sphere via inverse stereographic projection (same "
                          "map-on-paper vs. map-on-a-globe idea) -- purely a post-training "
                          "visualization, does not change training in any way. See "
-                         "randers_umap.stereographic_project's own docstring for the formula. "
+                         "randers_fdgl.stereographic_project's own docstring for the formula. "
                          "Off by default; the normal flat 2D plot is always still produced.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_pca_embedding")
@@ -169,7 +169,7 @@ def main():
     # [OURS 2026-08-26]
     # this is the ONLY structural difference from asymm_dist_MNIST.py: the
     # rest of the pipeline (IsUMap's own distance_graph_generation, then our
-    # own randers_umap_fit) is byte-for-byte the same mechanism, just fed
+    # own fdgl_low_dim) is byte-for-byte the same mechanism, just fed
     # lower-dimensional input.
     pca_dim = min(args.pca_dim, X.shape[0], X.shape[1])
     pca = PCA(n_components=pca_dim, random_state=args.seed)
@@ -180,10 +180,10 @@ def main():
               f"explained variance retained = {explained:.4f}")
 
     # ---- IsUMap's own asymmetric distance -- SPARSE (pre-Dijkstra), fed
-    # directly into randers_umap_fit's force computation. [OURS 2026-09-09]
+    # directly into fdgl_low_dim's force computation. [OURS 2026-09-09]
     # Previously this file ran the i==j-filtered reconstruction + Dijkstra
     # itself right here, producing a DENSE D_asym and feeding THAT to
-    # randers_umap_fit -- meaning the force computation's own k-NN selection
+    # fdgl_low_dim -- meaning the force computation's own k-NN selection
     # ran on the POST-Dijkstra geodesic graph (any of the n-1 other points
     # could end up "closest"), not the raw pre-Dijkstra star-graph structure
     # isumap's own ~k directly-listed neighbours actually encode. Empirically
@@ -192,8 +192,8 @@ def main():
     # -- a real, not cosmetic, difference. Now uses isumap_bridge.py's
     # build_isumap_dist_matrix() (which already carries the i==j-key fix
     # this file's own comment above used to explain by hand), byte-for-byte
-    # the same function run_mammoth_isumap.py/run_swiss_roll_isumap.py/
-    # run_sphere_isumap.py feed their own force computations -- this file's
+    # the same function run_mammoth_calculated.py/run_swiss_roll_calculated.py/
+    # run_sphere_calculated.py feed their own force computations -- this file's
     # pipeline is now structurally identical to those, just with MNIST's
     # PCA-reduced X.
     n = X_pca.shape[0]
@@ -217,7 +217,7 @@ def main():
     # isumap_style_init's own docstring), same as every other isumap-family
     # script. Built on a SEPARATE, throwaway Dijkstra-completed dense copy,
     # purely for this init -- does not replace the sparse D_asym fed to
-    # randers_umap_fit above.
+    # fdgl_low_dim above.
     Y_init = isumap_style_init(D_asym, d=2, seed=args.seed)
 
     # [OURS 2026-09-10] --fixed-drift: derive B ONCE from D_asym's own
@@ -233,8 +233,8 @@ def main():
     else:
         B_fixed = None
 
-    # D_geo: the Euclidean-consistent weight source for randers_umap_fit's
-    # weight-consistency fix (see run_swiss_roll_isumap.py's own docstring
+    # D_geo: the Euclidean-consistent weight source for fdgl_low_dim's
+    # weight-consistency fix (see run_swiss_roll_calculated.py's own docstring
     # for the full rationale and the both-finite-fallback bug fix -- a plain
     # (D_asym+D_asym.T)/2 average would be sparser than D_asym itself here).
     # [OURS 2026-09-09] Previously never wired through for MNIST at all.
@@ -242,17 +242,17 @@ def main():
     D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
                       np.where(np.isfinite(D_asym), D_asym, D_asym.T))
 
-    # ---- embed with our own randers_umap_fit -------------------------------
+    # ---- embed with our own fdgl_low_dim -------------------------------
     # [OURS 2026-08-26] some pairs remain unreachable (inf) in the sparse
     # D_asym -- an inherent property of a directed k-NN graph, not a bug.
-    # randers_umap_fit's own N computation already handles this safely
+    # fdgl_low_dim's own N computation already handles this safely
     # (np.where(isfinite(N), N, 0.0) zeroes out undefined pairs -- see its
     # own comment), but numpy still prints a RuntimeWarning for the
     # inf-inf/inf/inf arithmetic that produces those NaNs before they get
     # zeroed. Suppressed here (verified harmless via direct testing) purely
     # to keep the console output readable.
     with np.errstate(invalid="ignore", divide="ignore"):
-        out = randers_umap_fit(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
+        out = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
                                 n_epochs=args.epochs, use_drift=True, B_fixed=B_fixed,
                                 Y_init_override=Y_init, D_geo=D_geo,
                                 snapshot_every=args.snapshot_every,
@@ -327,7 +327,7 @@ def main():
 
     # ---- snapshot grid: init -> every N epochs -> final, side by side -----
     # [OURS 2026-08-26]
-    # same mechanism as run_swiss_roll.py's own --snapshot-every.
+    # same mechanism as run_swiss_roll_generated.py's own --snapshot-every.
     if args.snapshot_every is not None:
         snaps = out["snapshots"]
         n_snap = len(snaps)
