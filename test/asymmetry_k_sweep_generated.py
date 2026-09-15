@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-asymmetry_k_sweep.py -- two modes, both built on fdgl_pipeline's
+asymmetry_k_sweep_generated.py -- two modes, both built on fdgl_pipeline's
 "initial" (target, D_asym) vs. "final" (trained embedding) asymmetry_score
 (randers_bridge.asymmetry_score/asymmetry_score_final), on any of this
 project's 4 Randers-field datasets (swiss_roll, mammoth, sphere_tangential,
@@ -27,12 +27,12 @@ sphere_radial) -- see --dataset below.
 
 Usage
 -----
-    python asymmetry_k_sweep.py
-    python asymmetry_k_sweep.py --n 1000 --k-min 5 --k-max 60 --k-step 5
-    python asymmetry_k_sweep.py --adjacency threshold --epochs 300
-    python asymmetry_k_sweep.py --dataset mammoth --adjacency knn
-    python asymmetry_k_sweep.py --mode distribution --k 20 --epochs 300
-    python asymmetry_k_sweep.py --mode distribution --dataset mammoth --k 30
+    python asymmetry_k_sweep_generated.py
+    python asymmetry_k_sweep_generated.py --n 1000 --k-min 5 --k-max 60 --k-step 5
+    python asymmetry_k_sweep_generated.py --adjacency threshold --epochs 300
+    python asymmetry_k_sweep_generated.py --dataset mammoth --adjacency knn
+    python asymmetry_k_sweep_generated.py --mode distribution --k 20 --epochs 300
+    python asymmetry_k_sweep_generated.py --mode distribution --dataset mammoth --k 30
 """
 
 import argparse
@@ -216,7 +216,7 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", type=str, default=None,
                     help="output PNG filename for the main plot -- defaults to "
-                         "asymmetry_k_sweep_<dataset>.png (--mode sweep) or "
+                         "asymmetry_k_sweep_generated_<dataset>.png (--mode sweep) or "
                          "asymmetry_distribution_<dataset>_k<k>.png (--mode distribution).")
     args = p.parse_args()
 
@@ -277,7 +277,7 @@ def main():
 
     # ---- mode == "sweep" (default, unchanged) ----
     if args.out is None:
-        args.out = f"asymmetry_k_sweep_{args.dataset}.png"
+        args.out = f"asymmetry_k_sweep_generated_{args.dataset}.png"
 
     k_values = list(range(args.k_min, args.k_max + 1, args.k_step))
 
@@ -289,7 +289,7 @@ def main():
                                     negative_sampling=args.neg_sampling)
 
     # ---- results table ----
-    print(f"\n--- asymmetry_k_sweep results ({args.dataset}, adjacency={args.adjacency}, "
+    print(f"\n--- asymmetry_k_sweep_generated results ({args.dataset}, adjacency={args.adjacency}, "
           f"n={args.n}, epochs={args.epochs}) ---")
     print(f"{'k':>4}  {'initial':>8}  {'final':>8}  {'% preserved':>12}  {'alignment':>9}")
     for k, initial, final, align in zip(k_values, results["initial"], results["final"],

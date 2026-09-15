@@ -86,7 +86,7 @@ def load_breast_cancer_csv(path):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--csv", default=os.path.join(ROOT, "BreastCancerDataset.csv"),
+    p.add_argument("--csv", default=os.path.join(HERE, "BreastCancerDataset.csv"),
                     help="path to BreastCancerDataset.csv")
     p.add_argument("--k", type=int, default=15,
                     help="IsUMap's own distance_graph_generation neighbourhood size "

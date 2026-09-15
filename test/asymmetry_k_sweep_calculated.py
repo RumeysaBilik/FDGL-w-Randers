@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-asymmetry_k_sweep_isumap.py -- [OURS 2026-09-07] isumap-flavored counterpart
-of asymmetry_k_sweep.py. Computes EXACTLY the same two quantities (global
+asymmetry_k_sweep_calculated.py -- [OURS 2026-09-07] isumap-flavored counterpart
+of asymmetry_k_sweep_generated.py. Computes EXACTLY the same two quantities (global
 asymmetry_score vs. k, and per-node % preservation at a fixed k), but built
 on the isumap pipeline (run_swiss_roll_calculated.py's build_isumap_dist_matrix
 + isumap_style_init + live-drift fdgl_low_dim) instead of
@@ -25,15 +25,15 @@ but never called).
 
 --mode distribution: for a SINGLE k, runs the pipeline once and plots a
     histogram of per-node "% of target asymmetry preserved" -- same
-    definition as asymmetry_k_sweep.py's own --mode distribution.
+    definition as asymmetry_k_sweep_generated.py's own --mode distribution.
 
 Usage
 -----
-    python asymmetry_k_sweep_isumap.py
-    python asymmetry_k_sweep_isumap.py --n 1000 --k-min 5 --k-max 60 --k-step 5
-    python asymmetry_k_sweep_isumap.py --dataset mammoth --epochs 300
-    python asymmetry_k_sweep_isumap.py --mode distribution --k 20 --epochs 300
-    python asymmetry_k_sweep_isumap.py --mode distribution --dataset sphere --k 30
+    python asymmetry_k_sweep_calculated.py
+    python asymmetry_k_sweep_calculated.py --n 1000 --k-min 5 --k-max 60 --k-step 5
+    python asymmetry_k_sweep_calculated.py --dataset mammoth --epochs 300
+    python asymmetry_k_sweep_calculated.py --mode distribution --k 20 --epochs 300
+    python asymmetry_k_sweep_calculated.py --mode distribution --dataset sphere --k 30
 """
 
 import argparse
@@ -60,7 +60,7 @@ from run_swiss_roll_generated import make_swiss_roll_randers
 from run_mammoth_generated import make_mammoth_randers
 from run_sphere_tangential_generated import make_sphere_points
 
-# [OURS 2026-09-07] unlike asymmetry_k_sweep.py's DATASET_GENERATORS, these
+# [OURS 2026-09-07] unlike asymmetry_k_sweep_generated.py's DATASET_GENERATORS, these
 # don't need to share a return signature -- only the first element (X) is
 # ever used, since isumap's own D_asym construction (distance_graph_
 # generation) has no field/vector-field parameter at all; whatever else
@@ -73,7 +73,7 @@ DATASET_GENERATORS = {
 
 
 def _alignment(per_node_initial, per_node_final):
-    """[OURS 2026-09-07] identical to asymmetry_k_sweep.py's own _alignment --
+    """[OURS 2026-09-07] identical to asymmetry_k_sweep_generated.py's own _alignment --
     Pearson correlation between the two per-node asymmetry vectors, nan-pairs
     dropped first."""
     valid = np.isfinite(per_node_initial) & np.isfinite(per_node_final)
@@ -168,7 +168,7 @@ def run_isumap_asymmetry(X, k, epochs, neg, seed, proj_dim=2,
 def sweep_asymmetry_vs_k(X, k_values, epochs, neg, seed, verbose=True,
                           force_model="fr_gravity", fr_k=None, negative_sampling=False,
                           ramp=False):
-    """isumap counterpart of asymmetry_k_sweep.py's sweep_asymmetry_vs_k."""
+    """isumap counterpart of asymmetry_k_sweep_generated.py's sweep_asymmetry_vs_k."""
     out = {"initial": [], "final": [], "alignment": [], "emb_k": []}
     for k in k_values:
         result = run_isumap_asymmetry(X, k, epochs, neg, seed,
@@ -192,7 +192,7 @@ def sweep_asymmetry_vs_k(X, k_values, epochs, neg, seed, verbose=True,
 def per_node_preservation(X, k, epochs, neg, seed, min_initial=1e-3,
                            force_model="fr_gravity", fr_k=None, negative_sampling=False,
                            ramp=False):
-    """isumap counterpart of asymmetry_k_sweep.py's per_node_preservation."""
+    """isumap counterpart of asymmetry_k_sweep_generated.py's per_node_preservation."""
     result = run_isumap_asymmetry(X, k, epochs, neg, seed,
                                    force_model=force_model, fr_k=fr_k,
                                    negative_sampling=negative_sampling, ramp=ramp,
@@ -248,7 +248,7 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", type=str, default=None,
                     help="output PNG filename -- defaults to "
-                         "asymmetry_k_sweep_isumap_<dataset>.png (--mode sweep) or "
+                         "asymmetry_k_sweep_calculated_<dataset>.png (--mode sweep) or "
                          "asymmetry_distribution_isumap_<dataset>_k<k>.png (--mode distribution).")
     args = p.parse_args()
 
@@ -307,7 +307,7 @@ def main():
 
     # ---- mode == "sweep" ----
     if args.out is None:
-        args.out = f"asymmetry_k_sweep_isumap_{args.dataset}.png"
+        args.out = f"asymmetry_k_sweep_calculated_{args.dataset}.png"
 
     k_values = list(range(args.k_min, args.k_max + 1, args.k_step))
 
@@ -318,7 +318,7 @@ def main():
                                     fr_k=args.fr_k, negative_sampling=args.neg_sampling,
                                     ramp=args.ramp)
 
-    print(f"\n--- asymmetry_k_sweep_isumap results ({args.dataset}, n={args.n}, "
+    print(f"\n--- asymmetry_k_sweep_calculated results ({args.dataset}, n={args.n}, "
           f"epochs={args.epochs}) ---")
     print(f"{'k':>4}  {'emb_k':>5}  {'initial':>8}  {'final':>8}  {'% preserved':>12}  {'alignment':>9}")
     for k, emb_k, initial, final, align in zip(k_values, results["emb_k"], results["initial"],

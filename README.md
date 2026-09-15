@@ -52,7 +52,7 @@ Output is an `.npz` (embedding + metadata) and a `.png` plot.
 | Script | Checks |
 |---|---|
 | `test.py` | Randers-validity (`\|\|b_i\|\| <= 1-delta`), reconstruction stress, direction accuracy on the swiss roll. |
-| `asymmetry_k_sweep.py` / `asymmetry_k_sweep_isumap.py` | How asymmetry strength varies with `k`, for the generated / calculated families respectively. |
+| `asymmetry_k_sweep_generated.py` / `asymmetry_k_sweep_calculated.py` | How asymmetry strength varies with `k`, for the generated / calculated families respectively. |
 | `drift_magnitude_test.py` | Tracks `\|\|b_i\|\|` per epoch against its theoretical bound, across all four located-drift datasets. |
 | `stability_check.py` | Embedding stability vs. subsample size (Procrustes distance), mirroring the UMAP paper's Fig. 8. |
 | `compare_force_models.py` | Compares force models (e.g. Fruchterman-Reingold-style gravity vs. UMAP's own attraction/repulsion). |

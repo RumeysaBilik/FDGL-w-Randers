@@ -236,7 +236,6 @@ def compute_drift(N: np.ndarray, knn_mask: np.ndarray, k: int,
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Main fit: force-directed layout with the drift folded into rho
-#    (UMAP's own forces, with rho/g_ij replacing UMAP's plain d/e_ij)
 # ─────────────────────────────────────────────────────────────────────────────
 def fdgl_low_dim(
     D_asym: np.ndarray,
@@ -272,7 +271,7 @@ def fdgl_low_dim(
     negative_sampling: bool = False,
 ) -> dict:
     """
-    Part A: drift folded into the UMAP metric itself.
+    Part A:
 
         rho(i->j) = ||y_i-y_j|| + b_i . (y_j-y_i)
         grad_{y_i} rho = -(e_ij + b_i) =: -g_ij

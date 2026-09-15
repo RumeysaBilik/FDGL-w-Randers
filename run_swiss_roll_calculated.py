@@ -127,7 +127,7 @@ def make_swiss_roll_randers(n, seed=42):
 # [OURS 2026-09-08] locate_B_from_D_asym() (the frozen-B alternative to the
 # live mechanism main() actually runs) removed -- confirmed dead code, never
 # called anywhere in this file, run_mammoth_calculated.py, run_sphere_calculated.py,
-# or asymmetry_k_sweep_isumap.py (only imported by run_mammoth_calculated.py,
+# or asymmetry_k_sweep_calculated.py (only imported by run_mammoth_calculated.py,
 # itself never invoked there either). The live/frozen comparison this
 # function was for still exists and is actively used, just as its own
 # separate copy in MNIST/compare_live_vs_frozen_direction.py -- that one is
