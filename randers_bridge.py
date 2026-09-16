@@ -277,6 +277,21 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k,
                                        randers_field=None, adjacency=adjacency)
 
+    # [OURS 2026-09-16] (real,real) block used to be plain Euclidean (via
+    # X_aug above, randers_field=None). Swap it for the symmetrized Randers
+    # geodesic instead -- 0.5*(D_asym+D_asym^T), D_asym = the same directed
+    # distance the apply step below uses -- so the locate step actually
+    # reflects the Randers structure on the real points, not just on the
+    # real-virtual/virtual-virtual links. Only the real-real quadrant
+    # changes; the rest of D_sym_aug (built above) is untouched.
+    if verbose:
+        print(f"Locate: (real,real) block -> symmetrized Randers geodesic "
+              f"0.5*(D_asym+D_asym^T)...")
+    D_real_asym, _ = compute_dist_matrix(X, n_neighbors=k,
+                                         randers_field=omega, adjacency=adjacency)
+    D_sym_aug[:n, :n] = 0.5 * (D_real_asym + D_real_asym.T)
+    np.fill_diagonal(D_sym_aug, 0.0)
+
     # One deterministic placement call, no training. locate_epochs is
     # unused -- kept only so existing callers/CLI flags don't break.
     if verbose:

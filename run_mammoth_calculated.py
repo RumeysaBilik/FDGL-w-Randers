@@ -119,26 +119,11 @@ def main():
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
               f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
 
-    # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- see
-    # run_swiss_roll_calculated.py's own docstring for the full rationale AND
-    # the bug-fix note: a plain (D_asym+D_asym.T)/2 average requires BOTH
-    # directions finite, which made D_geo STRICTLY SPARSER than D_asym for
-    # isumap's asymmetric-existence graphs (some rows ending up with zero
-    # real neighbours, corrupting A_geo's calibration with inf/NaN). Fix:
-    # average where both directions exist, fall back to whichever single
-    # direction is finite otherwise.
+
     both_finite = np.isfinite(D_asym) & np.isfinite(D_asym.T)
     D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
                       np.where(np.isfinite(D_asym), D_asym, D_asym.T))
 
-    # [OURS 2026-08-19] B is derived live, every epoch, purely from
-    # D_asym's own asymmetry, no omega. --init-only still shows a
-    # meaningful epoch-0 drift thanks to the 2026-08-19 fix in
-    # randers_fdgl.py's snapshot capture (computes the real epoch-0
-    # compute_drift(...) value instead of an all-zero placeholder).
-    # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
-    # run_swiss_roll_calculated.py's isumap_style_init docstring), NOT
-    # fdgl_low_dim's internal UMAP-style spectral_layout default.
     if not args.quiet:
         print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
     Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
@@ -173,8 +158,7 @@ def main():
         Y, B = out["Y"], out["B"]
 
     # ---- plot --------------------------------------------------------
-    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
-    # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
+
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
     if args.proj_dim == 3:

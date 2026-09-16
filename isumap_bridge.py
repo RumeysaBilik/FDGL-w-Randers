@@ -68,4 +68,12 @@ def isumap_style_init(D_asym, d=2, seed=0):
               f"Dijkstra -- filled with the graph's own max finite distance "
               f"({fallback:.4f}) before classical_mds.")
 
+    # [OURS 2026-09-16] D_dense is still directed/asymmetric here (Dijkstra
+    # ran with directed=True on D_asym's own asymmetric structure). But
+    # classical_mds's double-centering uses np.linalg.eigh, which silently
+    # assumes a symmetric input (reads only one triangle, discards the
+    # other) -- same category of bug we fixed in fdgl_pipeline's locate
+    # step for the generated family. Symmetrize before handing off.
+    D_dense = 0.5 * (D_dense + D_dense.T)
+
     return classical_mds(D_dense, d=d, seed=seed)

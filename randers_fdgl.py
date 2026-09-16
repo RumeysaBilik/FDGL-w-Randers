@@ -193,7 +193,7 @@ def _compute_N(D_asym: np.ndarray) -> np.ndarray:
     diam = D_asym[finite].max() if finite.any() else 1.0
     diam_fill = diam * (1.0 + 1e-6) if diam > 0 else 1e-6
     D_filled = np.where(finite, D_asym, diam_fill)
-    N = (D_filled - D_filled.T) / (D_filled + D_filled.T + 1e-12)
+    N = (D_filled**2 - D_filled.T**2) / (D_filled + D_filled.T + 1e-12)
     both_missing = ~finite & ~finite.T
     return np.where(both_missing, 0.0, N)
 
