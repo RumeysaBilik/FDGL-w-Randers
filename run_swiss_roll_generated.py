@@ -1,26 +1,16 @@
 #!/usr/bin/env python3
 """
-run_swiss_roll_generated.py -- Randers-UMAP on the swiss-roll + Randers field dataset,
-drift (B) initialised via the "locate the target, then attach" method.
+run_swiss_roll_generated.py -- Randers Force-Directed Layout on the swiss-roll +
+a hand-crafted Randers field dataset, using the same fdgl_pipeline() locate+apply
+pipeline as run_mammoth_generated.py.
 
-    b_i^virtual target := x_i + omega_i                (real ambient point)
-    place n real + n virtual points with ONE spectral_layout call (no SGD
-        training on the augmented set -- see [OURS 2026-08-16] below)
-    b_i := y_i^virtual - y_i                            (in that placement)
-    embed the n real points on the true D_asym, with that b_i frozen +
-        attached (B_fixed) -- only a_i (the real point's own position)
-        trains each epoch, b_i never changes
+Randers field on the swiss roll
+--------------------------------
 
-    the locate step used to train the augmented real+virtual system for locate_epochs (default 500)
-    iterations of full force-directed fdgl_low_dim before reading off
-    B := Y_virtual - Y_real. That entangles B with the stochastic
-    optimisation dynamics (negative sampling, attraction/repulsion) of an
-    essentially separate embedding problem -- not a faithful readout of the
-    true geometric relationship between x_i and x_i+omega_i. Replaced with
-    a single deterministic spectral_layout call on the augmented graph
-    (the same method UMAP itself uses as ITS OWN initialisation, precisely
-    because it captures global structure without needing SGD refinement).
-    --locate-epochs is now a no-op, kept only for CLI/call-site compat.
+    direction : tangent to the spiral, d/dt (t*cos t, t*sin t) -- the true
+                derivative of the parametric curve (matches DAGES's own
+                swiss-roll experiment)
+    magnitude : constant alpha=0.5
 
 Usage
 -----
@@ -62,19 +52,11 @@ def make_swiss_roll_randers(n, seed=42):
     y = height
     X = np.column_stack([x, y, z])
 
-    # [OURS, original] pure rotational/angular tangent -- a 90-degree
-    # rotation of the (x,z) position, NOT the true derivative of the
-    # spiral curve. Kept here (commented, not deleted) so both versions
-    # can be toggled between -- this one differs from DAGES's own true
-    # tangent field by roughly 4-12 degrees over our t-range (missing the
-    # radial-growth component -- see conversation/report for the derivation).
+    # alternate (unused) field: pure rotational tangent, not the true
+    # derivative of the spiral -- kept commented for reference
     #V = np.column_stack([-X[:, 2], np.zeros(n), X[:, 0]])
 
-    # [OURS 2026-08-16, per DAGES's actual main_swiss_roll_full.py] true
-    # tangent-to-the-spiral direction: d/dt (t*cos t, t*sin t), the exact
-    # derivative of the parametric curve -- includes the radial-growth
-    # component the commented-out V above was missing. This is what makes
-    # the ground-truth field match DAGES's own swiss-roll experiment.
+    # true tangent-to-the-spiral direction: d/dt (t*cos t, t*sin t)
     tangent_x = np.cos(t) - t * np.sin(t)
     tangent_z = np.sin(t) + t * np.cos(t)
     V = np.column_stack([tangent_x, np.zeros(n), tangent_z])
@@ -89,16 +71,6 @@ def make_swiss_roll_randers(n, seed=42):
     return X, omega, t
 
 
-# [OURS 2026-08-28] fdgl_pipeline() used to be defined here --
-# it now lives in randers_bridge.py (imported above), which is the natural
-# home since the function's job (X, omega -> D_asym -> embedding) is
-# exactly what that module is for. Every other run_*.py/test.py/
-# drift_magnitude_test.py/stability_check.py already imported it FROM this
-# file; they now import it from randers_bridge.py instead (this file's own
-# CLI/plotting code below, main(), is unaffected -- it just calls
-# fdgl_pipeline(...) exactly as before, only the import line changed).
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--n",      type=int, default=2000)
@@ -106,22 +78,22 @@ def main():
     p.add_argument("--neg",    type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
     p.add_argument("--locate-epochs", type=int, default=500,
-                    help="[OURS 2026-08-16] no-op -- locate step is now a single "
+                    help="no-op -- locate step is now a single "
                          "spectral_layout call, no training. Kept for compat.")
     p.add_argument("--clip-delta", type=float, default=0.01)
     p.add_argument("--gravity", action="store_true",
-                    help="[OURS 2026-08-17] add per-node gravity toward xi_i=y_i+b_i "
+                    help="add per-node gravity toward xi_i=y_i+b_i "
                          "(Bannister et al. f_g=gamma*M[i]*b_i), weighted by "
                          "--gravity-neighbor-weight unless disabled.")
     p.add_argument("--gravity-strength", type=float, default=1.0,
-                    help="[OURS 2026-08-17] gamma_t in Bannister et al.'s gravity force. "
+                    help="gamma_t in Bannister et al.'s gravity force. "
                          "Only matters with --gravity.")
     p.add_argument("--no-gravity-neighbor-weight", action="store_true",
-                    help="[OURS 2026-08-17] disable the neighbour-plausibility weighting "
+                    help="disable the neighbour-plausibility weighting "
                          "(revert to the old unconditional gravity pull). Only matters with "
                          "--gravity.")
     p.add_argument("--no-virtual-neighbor", action="store_true",
-                    help="[OURS 2026-08-20] by default, each node's own virtual point "
+                    help="by default, each node's own virtual point "
                          "xi_i=y_i+b_i is treated as an UNCONDITIONAL (k+1)-th attractive "
                          "neighbour every epoch (mu_virtual=1.0 always, no plausibility "
                          "gating), pulled with UMAP's OWN attraction curve (same attr_coeff "
@@ -132,27 +104,27 @@ def main():
                     help="if given, also save <out>_snapshots.png: the apply-step "
                          "embedding every N epochs (from Y_real0 to final), side by side")
     p.add_argument("--ramp", action="store_true",
-                    help="[OURS 2026-08-11] ramp B_fixed's magnitude 0->1 over the first "
+                    help="ramp B_fixed's magnitude 0->1 over the first "
                          "70%% of apply-step epochs instead of applying it at full strength "
                          "from epoch 0 (default). Recommended for large/noisy n where the "
                          "located B has extreme (clipped) entries for many nodes -- full "
                          "strength from epoch 0 can fling those nodes out immediately, "
                          "producing central-collapse-plus-outliers instead of a smooth unroll.")
     p.add_argument("--init-only", action="store_true",
-                    help="[OURS 2026-08-13] stop after the locate step -- skip the "
+                    help="stop after the locate step -- skip the "
                          "force-directed apply/training step entirely, and just plot/save "
                          "the raw located embedding (Y_real0) with its drift vectors "
                          "(B_located). Ignores --epochs, --ramp, --gravity, "
                          "--snapshot-every (there's no training loop to snapshot).")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20] embedding "
+                    help="embedding "
                          "dimension for the locate step's placement AND the apply "
                          "step's force-directed training (mirrors FinslerMDS's "
                          "--proj-dim). 2 (default) = existing 2D pipeline, unchanged. "
                          "3 = full 3D layout; the main scatter plot switches to a 3D "
                          "axes with 3D drift-arrow quivers automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
-                    help="[OURS 2026-08-20, default flipped 2026-09-09] how "
+                    help="how "
                          "compute_dist_matrix builds its base adjacency graph. "
                          "'knn' (default) = TRUE per-point k-nearest-neighbours "
                          "membership (sklearn.kneighbors_graph style), asymmetric in "
@@ -160,11 +132,11 @@ def main():
                          "which is exactly the one-directional-existence asymmetry we "
                          "want the drift signal to see by default. 'threshold' = "
                          "lwileczek/isomap-style eps-threshold rule, symmetric by "
-                         "construction (default until 2026-09-09) -- see randers_bridge."
+                         "construction -- see randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
                          "explanation.")
     p.add_argument("--normalize", action="store_true",
-                    help="[OURS 2026-08-25] default OFF -- "
+                    help="default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
@@ -172,9 +144,9 @@ def main():
                          "fdgl_low_dim's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28] which attraction/"
+                    help="which attraction/"
                          "repulsion LAW drives the force-directed layout. 'fr_gravity' "
-                         "(NEW DEFAULT) = Bannister et al.'s own Fruchterman-Reingold-"
+                         "(default) = Bannister et al.'s own Fruchterman-Reingold-"
                          "style forces (arXiv:1209.0748 Section 2, cross-checked against "
                          "the hypergz package's our_layout.py), evaluated at our (possibly "
                          "Randers-substituted) rho/g. 'umap' = the original UMAP "
@@ -185,7 +157,7 @@ def main():
                     help="natural edge length for --force-model fr_gravity. None "
                          "(default) uses the paper's own sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-08-31] only has an "
+                    help="only has an "
                          "effect with --force-model umap (fr_gravity never used "
                          "negative sampling to begin with). Default OFF -- repulsion "
                          "is the dense sum over every non-neighbour, rescaled to match "
@@ -241,9 +213,7 @@ def main():
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
-    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
-    # + 3D quiver (same pattern already used above for the ambient field
-    # plot); proj_dim==2 -> unchanged original 2D plot.
+    # proj_dim==3 -> 3D scatter + quiver; proj_dim==2 -> 2D plot
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
     if args.proj_dim == 3:
@@ -269,9 +239,9 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
     if args.init_only:
-        ax.set_title(f"Randers-UMAP swiss-roll, LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
+        ax.set_title(f"Randers Force-Directed Layout swiss-roll, LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP swiss-roll, located-drift init  "
+        ax.set_title(f"Randers Force-Directed Layout swiss-roll, located-drift init  "
                      f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
@@ -292,9 +262,8 @@ def main():
         vmin, vmax = t.min(), t.max()
         sc2 = None
 
-        # [OURS 2026-08-20] proj_dim==3 -> build
-        # the grid with per-cell 3D axes (plt.subplots can't hand out mixed
-        # 2D/3D axes, so we use add_subplot per cell instead).
+        # proj_dim==3 -> build the grid with per-cell 3D axes (plt.subplots
+        # can't hand out mixed 2D/3D axes, so we use add_subplot per cell)
         if args.proj_dim == 3:
             fig2 = plt.figure(figsize=(3.6 * ncols, 3.6 * nrows))
             axes2 = [fig2.add_subplot(nrows, ncols, idx + 1, projection="3d")
@@ -336,7 +305,7 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers-UMAP swiss-roll, apply-step trajectory  (n={n}, "
+        fig2.suptitle(f"Randers Force-Directed Layout swiss-roll, apply-step trajectory  (n={n}, "
                       f"snapshot_every={args.snapshot_every})", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=fig2.get_axes(), label="t (intrinsic coordinate)",

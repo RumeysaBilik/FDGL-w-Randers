@@ -125,8 +125,7 @@ def edge_length_stats(Y, knn_mask):
 def reconstruct_rho(Y, B):
     """
     rho(i->j) = ||y_i-y_j|| + b_i.(y_j-y_i) -- same formula
-    fdgl_low_dim's own training loop and test.py/
-    compare_live_vs_frozen_direction.py use, standalone here so
+    fdgl_low_dim's own training loop and test.py use, standalone here so
     asymmetry_score can be evaluated on the TRAINED embedding's own
     reconstructed distances, not just on the raw input D_asym.
     """

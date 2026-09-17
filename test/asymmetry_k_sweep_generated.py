@@ -175,7 +175,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", choices=["sweep", "distribution"], default="sweep",
-                    help="[OURS 2026-09-01] 'sweep' (default) = global asymmetry_score vs. k, "
+                    help="'sweep' (default) = global asymmetry_score vs. k, "
                          "one point per k. 'distribution' = per-node %% preserved histogram at "
                          "ONE fixed k (--k).")
     p.add_argument("--dataset", choices=list(DATASET_GENERATORS.keys()), default="swiss_roll",
@@ -202,16 +202,16 @@ def main():
                          "trains once, total.")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to "
+                    help="attraction/repulsion law passed to "
                          "fdgl_pipeline/fdgl_low_dim -- 'fr_gravity' (default) = "
                          "Bannister et al.'s spring/inverse-square law, 'umap' = UMAP's own "
                          "fitted (a,b)-curve. Applied at every k in --mode sweep, and at the "
                          "single --k in --mode distribution.")
     p.add_argument("--fr-k", type=float, default=None,
-                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
+                    help="natural edge-length constant for force_model="
                          "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
     p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
+                    help="use TRUE stochastic negative sampling for repulsion "
                          "instead of the dense/exact sum.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", type=str, default=None,

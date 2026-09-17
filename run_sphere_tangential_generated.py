@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
 """
-run_sphere_tangential_generated.py -- Randers-UMAP on a synthetic sphere point cloud +
+run_sphere_tangential_generated.py -- Randers Force-Directed Layout on a synthetic sphere point cloud +
 a TANGENTIAL (azimuthal) Randers field, using the EXACT SAME pipeline as
 run_swiss_roll_generated.py / run_mammoth_generated.py (fdgl_pipeline, imported directly,
 not duplicated).
-
-[OURS 2026-08-19] New synthetic dataset,
-parallel to the swiss roll: a sphere has no boundary and no single natural
-"unrolled" 1D coordinate like the swiss roll's t, so (like mammoth) we use
-an intrinsic coordinate purely for colouring plots -- here, theta, the
-colatitude (angle from the north pole, 0 at the north pole, pi at the
-south pole).
-
-This file defines make_sphere_points() (pure geometry, no drift -- reused
-by run_sphere_radial_generated.py and run_sphere_calculated.py) and the TANGENTIAL field.
-See run_sphere_radial_generated.py for the RADIAL field and a discussion of why the
-two are expected to behave very differently under this pipeline.
 
 Tangential field
 ----------------
@@ -23,21 +11,6 @@ omega_i is the azimuthal ("eastward", d/dphi) unit direction at x_i,
 scaled to ||omega_i|| = alpha everywhere:
 
     omega_i \\propto (-y_i, x_i, 0)          (rotation about the z-axis)
-
-This is tangent to the sphere at every point (it is, by construction,
-orthogonal to the radial direction x_i itself: (-y,x,0) . (x,y,z) = 0), so
-it is a clean, everywhere-valid example of a Randers drift that never
-points off the manifold. It degenerates (direction undefined, though
-magnitude still -> alpha after normalisation) only exactly at the two
-poles (x=y=0) -- a measure-zero set under continuous sampling, guarded
-with a small epsilon in the normalisation below.
-
-Because this field is tangent to the sphere, it is ALIGNED with the local
-displacement direction between nearby neighbours (x_j - x_i for j near i
-is itself dominantly tangential to the sphere) -- so <omega_i, x_j-x_i> is
-generically large in magnitude, and we expect a strong, clean asymmetry
-signal in D_asym and a strong recovered drift. Contrast with
-run_sphere_radial_generated.py's field, which is expected to do the opposite.
 
 Usage
 -----
@@ -119,12 +92,12 @@ def main():
                          "training. Kept for compat with run_swiss_roll_generated.py's fdgl_pipeline signature.")
     p.add_argument("--clip-delta", type=float, default=0.01)
     p.add_argument("--gravity", action="store_true",
-                    help="[OURS 2026-08-17] add per-node gravity toward xi_i=y_i+b_i "
+                    help="add per-node gravity toward xi_i=y_i+b_i "
                          "(Bannister et al. f_g=gamma*M[i]*b_i).")
     p.add_argument("--gravity-strength", type=float, default=1.0)
     p.add_argument("--no-gravity-neighbor-weight", action="store_true")
     p.add_argument("--no-virtual-neighbor", action="store_true",
-                    help="[OURS 2026-08-20, default ON] each node's own virtual point "
+                    help="each node's own virtual point "
                          "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
                          "neighbour, pulled with UMAP's own attraction curve -- see "
                          "run_swiss_roll_generated.py's --no-virtual-neighbor help for the full "
@@ -134,13 +107,13 @@ def main():
     p.add_argument("--init-only", action="store_true")
     p.add_argument("--alpha", type=float, default=0.5, help="||omega|| for the tangential drift field (constant)")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20] embedding "
+                    help="embedding "
                          "dimension for the locate step's placement AND the apply "
                          "step's force-directed training -- see run_swiss_roll_generated.py's "
                          "--proj-dim help for the full explanation. 3 = full 3D "
                          "layout, main scatter plot switches to 3D axes automatically.")
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
-                    help="[OURS 2026-08-20, default flipped 2026-09-09] how "
+                    help="how "
                          "compute_dist_matrix builds its base adjacency graph -- see "
                          "run_swiss_roll_generated.py's --adjacency help / randers_bridge."
                          "compute_dist_matrix's adjacency docstring for the full "
@@ -149,7 +122,7 @@ def main():
                          "'threshold' = symmetric by construction (default until "
                          "2026-09-09).")
     p.add_argument("--normalize", action="store_true",
-                    help="[OURS 2026-08-25] default OFF -- "
+                    help="default OFF -- "
                          "B_located used as-is (prior behaviour, unchanged). If given, "
                          "replace each node's drift MAGNITUDE, every epoch, with its "
                          "LIVE distance to its own k-th nearest neighbour in the "
@@ -157,14 +130,14 @@ def main():
                          "fdgl_low_dim's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-31] see run_swiss_roll_generated.py's --force-model help -- "
+                    help="see run_swiss_roll_generated.py's --force-model help -- "
                          "'fr_gravity' (NEW DEFAULT) = Bannister et al.'s own "
                          "Fruchterman-Reingold-style forces, 'umap' = original UMAP "
                          "(a,b)-curve law.")
     p.add_argument("--fr-k", type=float, default=None,
                     help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
     p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-08-31] only affects --force-model umap -- see "
+                    help="only affects --force-model umap -- see "
                          "run_swiss_roll_generated.py's --neg-sampling help / fdgl_low_dim's "
                          "negative_sampling docstring for the full explanation.")
     p.add_argument("--seed",   type=int, default=0)
@@ -199,8 +172,6 @@ def main():
         print(f"wrote {args.out}_3d_field.png")
 
     # ---- 3D plot of the initial data with the drift ATTACHED (x_i -> x_i+omega_i), ----
-    # ---- exaggerated to be visible, drawn as crimson quiver arrows -- same -----
-    # ---- convention as run_mammoth_generated.py's drift-attached plot. ------------------
     X_virtual_display = X + omega * scale3d
     fig3d_v = plt.figure(figsize=(11, 9))
     ax3d_v = fig3d_v.add_subplot(111, projection="3d")
@@ -236,7 +207,6 @@ def main():
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
-    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
     # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
@@ -251,9 +221,7 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
-        # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
-        # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
+        # matplotlib's DEFAULT 3D
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")
     else:
         fig, ax = plt.subplots(figsize=(9, 8))
@@ -266,9 +234,9 @@ def main():
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
     if args.init_only:
-        ax.set_title(f"Randers-UMAP sphere (tangential), LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
+        ax.set_title(f"Randers Force-Directed Layout sphere (tangential), LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
     else:
-        ax.set_title(f"Randers-UMAP sphere (tangential), located-drift init  "
+        ax.set_title(f"Randers Force-Directed Layout sphere (tangential), located-drift init  "
                      f"(n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
@@ -329,7 +297,7 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers-UMAP sphere (tangential), apply-step trajectory  (n={n}, "
+        fig2.suptitle(f"Randers Force-Directed Layout sphere (tangential), apply-step trajectory  (n={n}, "
                       f"snapshot_every={args.snapshot_every})", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=fig2.get_axes(), label="theta (colatitude)",

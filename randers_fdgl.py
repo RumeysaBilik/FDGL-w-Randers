@@ -222,10 +222,10 @@ def compute_drift(N: np.ndarray, knn_mask: np.ndarray, k: int,
 
     weight = np.where(knn_mask, N, 0.0)                      # (n,n)
     b = (1.0 / k) * (weight[:, :, np.newaxis] * e).sum(axis=1)   # (n,d)
-
-    limit = 1.0 - clip_delta
-    norms = np.linalg.norm(b, axis=1, keepdims=True)
-    b = b * np.where(norms > limit, limit / np.maximum(norms, 1e-12), 1.0)
+    
+    # limit = 1.0 - clip_delta
+    # norms = np.linalg.norm(b, axis=1, keepdims=True)
+    # b = b * np.where(norms > limit, limit / np.maximum(norms, 1e-12), 1.0)
 
     if magnitude_target is not None:
         bnorm = np.linalg.norm(b, axis=1, keepdims=True)
@@ -448,7 +448,7 @@ def fdgl_low_dim(
         rf_str = "" if (randers_attractive and randers_repulsive) else \
             f"  [main force: attr={'randers' if randers_attractive else 'euclid'}, " \
             f"rep={'randers' if randers_repulsive else 'euclid'}]"
-        print(f"\n-- Randers-UMAP (Part A)  n={n} d={d} k={n_neighbors}  "
+        print(f"\n-- Randers Force-Directed Layout (Part A)  n={n} d={d} k={n_neighbors}  "
               f"force_model={force_model}  {mode_str}{grav_str}{vn_str}{rf_str} --")
         if force_model == "umap":
             print(f"   a={a:.4f} b={b_param:.4f}  (min_dist={min_dist}, spread={spread})")

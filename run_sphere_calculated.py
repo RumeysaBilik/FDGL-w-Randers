@@ -1,33 +1,21 @@
 #!/usr/bin/env python3
 """
-run_sphere_calculated.py -- sphere point cloud, but the distance matrix comes
-from distance_graph_generation() (the isumap method), NOT from
-randers_bridge.compute_dist_matrix() with an injected omega. EXACT SAME
-pipeline as run_swiss_roll_calculated.py / run_mammoth_calculated.py
-(build_isumap_dist_matrix, imported directly, not duplicated) -- only the
-dataset changes.
-
-Unlike run_sphere_tangential_generated.py / run_sphere_radial_generated.py, this script injects
-NO vector field at all: distance_graph_generation()'s asymmetry comes
-purely from the directed k-NN/star-graph structure of the raw point cloud
-X (make_sphere_points() -- no omega parameter exists in that function).
-The point of this script is the same as its swiss-roll/mammoth
-counterparts: does a drift signal recovered purely from an OBSERVED
-asymmetric dissimilarity matrix (no privileged access to any ground-truth
-field) still produce a sensible, drift-like embedding?
-
-[per the same 2026-08-18/19 back-and-forth documented in
-run_swiss_roll_calculated.py's module docstring] B is derived LIVE, every
-epoch, purely from D_asym's own asymmetry (compute_drift on
-N=(D_asym-D_asym.T)/(D_asym+D_asym.T), no omega anywhere) -- this is the
-final, reverted-to state for the other two isumap scripts, applied here
-from the start rather than going through the same locate-then-freeze
-detour.
+run_sphere_calculated.py -- derive a high-dimensional drift
+field from D_asym's own asymmetry. Once that omega exists, (X, omega)
+is structurally identical to the "generated" family's own (X, omega) pair
+-- so this script feeds it straight into randers_bridge.fdgl_pipeline,
+the EXACT SAME pipeline run_sphere_radial_generated.py / run_sphere_tangential_generated.py use.
 
 Usage
 -----
     python run_sphere_calculated.py
     python run_sphere_calculated.py --n 2000 --epochs 500
+
+Outputs
+-------
+    <out>_3d_field.png   ambient X coloured by theta, DERIVED omega arrows
+    <out>.png             embedding coloured by theta, drift arrows
+    <out>.npz             Y, B, theta, phi, X, omega (derived)
 """
 
 import argparse
@@ -43,131 +31,113 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from run_sphere_tangential_generated import make_sphere_points
-from isumap_bridge import build_isumap_dist_matrix, isumap_style_init
-from randers_fdgl import (fdgl_low_dim, arrow_scale, _compute_N,
-                           compute_drift, knn_mask_from_distance_matrix)
+from randers_bridge import fdgl_pipeline, compute_dist_matrix, compute_highdim_drift
+from randers_fdgl import arrow_scale
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--n", type=int, default=5000)
     p.add_argument("--radius", type=float, default=10.0)
-    p.add_argument("--k", type=int, default=30, help="k for distance_graph_generation (isumap's own D_asym)")
+    p.add_argument("--k", type=int, default=20,
+                    help="shared k: isumap's own D_asym (for deriving omega) AND "
+                         "fdgl_pipeline's own k-NN backbone (locate/apply steps).")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
-    p.add_argument("--gravity", action="store_true",
-                    help="[OURS 2026-08-17] add per-node gravity toward xi_i=y_i+b_i "
-                         "(Bannister et al. f_g=gamma*M[i]*b_i).")
+    p.add_argument("--locate-epochs", type=int, default=500,
+                    help="no-op -- kept for compat with fdgl_pipeline's signature.")
+    p.add_argument("--clip-delta", type=float, default=0.01,
+                    help="used both when deriving omega (compute_highdim_drift) and "
+                         "inside fdgl_pipeline's own apply step -- see "
+                         "compute_highdim_drift's docstring for the open caveat about "
+                         "this being an absolute (not X-scale-relative) cap.")
+    p.add_argument("--gravity", action="store_true")
     p.add_argument("--gravity-strength", type=float, default=1.0)
     p.add_argument("--no-gravity-neighbor-weight", action="store_true")
     p.add_argument("--no-virtual-neighbor", action="store_true",
-                    help="[OURS 2026-08-20, default ON] each node's own virtual point "
-                         "xi_i=y_i+b_i is, BY DEFAULT, an unconditional (k+1)-th attractive "
-                         "neighbour, pulled with UMAP's own attraction curve -- see "
-                         "randers_fdgl.py's use_virtual_neighbor docstring for the full "
-                         "explanation. Pass this flag to DISABLE it.")
-    p.add_argument("--clip-delta", type=float, default=0.01)
-    p.add_argument("--fixed-drift", action="store_true",
-                    help="[OURS 2026-09-10] derive B ONCE from D_asym's own asymmetry at "
-                         "Y_init and FREEZE it for the whole run, instead of the default live "
-                         "mechanism (B recomputed from the CURRENT Y every epoch) -- see "
-                         "run_swiss_roll_calculated.py's --fixed-drift help for the full "
-                         "explanation. Off by default.")
-    p.add_argument("--ramp", action="store_true")
-    p.add_argument("--init-only", action="store_true",
-                    help="stop before force-directed training -- runs a single epoch with an "
-                         "internal epoch-0 snapshot and returns that pre-training state.")
+                    help="[default ON] each node's own virtual point xi_i=y_i+b_i is an "
+                         "unconditional (k+1)-th attractive neighbour -- pass to disable.")
     p.add_argument("--snapshot-every", type=int, default=None)
-    p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3],
-                    help="[OURS 2026-08-20] embedding "
-                         "dimension for fdgl_low_dim's own internal spectral "
-                         "init AND the apply-step training -- see run_swiss_roll_generated.py's "
-                         "--proj-dim help for the full explanation. 3 = full 3D "
-                         "layout, main scatter plot switches to 3D axes automatically.")
-    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-08-28] see run_swiss_roll_generated.py's "
-                         "--force-model help -- 'fr_gravity' (NEW DEFAULT) = Bannister et al.'s "
-                         "own Fruchterman-Reingold-style forces, 'umap' = original UMAP "
-                         "(a,b)-curve law.")
-    p.add_argument("--fr-k", type=float, default=None,
-                    help="natural edge length for --force-model fr_gravity. None uses sqrt(1/n).")
-    p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-08-31] only affects --force-model umap -- see "
-                         "run_swiss_roll_generated.py's --neg-sampling help / fdgl_low_dim's "
-                         "negative_sampling docstring for the full explanation.")
+    p.add_argument("--ramp", action="store_true")
+    p.add_argument("--init-only", action="store_true")
+    p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3])
+    p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
+                    help="fdgl_pipeline's own adjacency mode -- see randers_bridge."
+                         "compute_dist_matrix's adjacency docstring.")
+    p.add_argument("--normalize", action="store_true",
+                    help="see fdgl_low_dim's scale_B_fixed_by_knn_distance docstring.")
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity")
+    p.add_argument("--fr-k", type=float, default=None)
+    p.add_argument("--neg-sampling", action="store_true")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", default="sphere_embedding_isumap")
+    p.add_argument("--out", default="sphere_embedding_calculated")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
-
-    apply_epochs = 1 if args.init_only else args.epochs
-    apply_snapshot_every = 1 if args.init_only else args.snapshot_every
 
     if not args.quiet:
         print(f"Generating sphere: n={args.n}, radius={args.radius}")
     X, theta, phi = make_sphere_points(args.n, seed=42, radius=args.radius)
+    n = args.n
 
     if not args.quiet:
-        print(f"\nBuilding distance matrix via distance_graph_generation (data_D, unfixed)...")
-    D_asym = build_isumap_dist_matrix(X, k=args.k, verbose=not args.quiet)
-
-    min_real_neighbors = int(np.isfinite(D_asym).sum(axis=1).min() - 1)
-    emb_k = min(args.k, max(min_real_neighbors, 1))
+        print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
+              f"(directed knn adjacency, no isumap normalization, no field)...")
+    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None,
+                                     directed=True, adjacency="knn")
+    emb_k = args.k
     if not args.quiet:
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
-              f"min real neighbours/row={min_real_neighbors}  emb_k used={emb_k}")
+              f"emb_k used={emb_k}")
 
-    # [OURS 2026-09-07, fixed 2026-09-07] D_geo -- see
-    # run_swiss_roll_calculated.py's own docstring for the full rationale AND
-    # the bug-fix note: a plain (D_asym+D_asym.T)/2 average requires BOTH
-    # directions finite, which made D_geo STRICTLY SPARSER than D_asym for
-    # isumap's asymmetric-existence graphs (some rows ending up with zero
-    # real neighbours, corrupting A_geo's calibration with inf/NaN). Fix:
-    # average where both directions exist, fall back to whichever single
-    # direction is finite otherwise.
-    both_finite = np.isfinite(D_asym) & np.isfinite(D_asym.T)
-    D_geo = np.where(both_finite, (D_asym + D_asym.T) / 2.0,
-                      np.where(np.isfinite(D_asym), D_asym, D_asym.T))
-
-    # [OURS 2026-09-03] init: real IsUMap's own cMDS choice (see
-    # run_swiss_roll_calculated.py's isumap_style_init docstring), NOT
-    # fdgl_low_dim's internal UMAP-style spectral_layout default.
     if not args.quiet:
-        print(f"\nInitialising Y via IsUMap's own classical MDS (not UMAP spectral_layout)...")
-    Y_init = isumap_style_init(D_asym, d=args.proj_dim, seed=args.seed)
+        print(f"\nDeriving AMBIENT-space omega from D_asym's own asymmetry "
+              f"(compute_highdim_drift)...")
+    omega = compute_highdim_drift(X, D_asym, emb_k, clip_delta=args.clip_delta)
+    if not args.quiet:
+        bn0 = np.linalg.norm(omega, axis=1)
+        print(f"omega (derived, ambient): mean||omega||={bn0.mean():.4f}  "
+              f"max||omega||={bn0.max():.4f}  (X itself spans "
+              f"~{np.ptp(X, axis=0).max():.1f} units per axis -- compare scale)")
 
-    if args.fixed_drift:
-        if not args.quiet:
-            print(f"\nDeriving B ONCE from D_asym's own asymmetry at Y_init, then freezing it "
-                  f"for the whole run (--fixed-drift)...")
-        knn_mask_fixed = knn_mask_from_distance_matrix(D_asym, emb_k)
-        N_fixed = _compute_N(D_asym)
-        B_fixed = compute_drift(N_fixed, knn_mask_fixed, emb_k, Y_init, clip_delta=args.clip_delta)
-    else:
-        if not args.quiet:
-            print(f"\nDeriving B live from D_asym's own asymmetry (no omega used) each epoch...")
-        B_fixed = None
+    # ---- 3D plot of the ambient sphere with the DERIVED omega field -------
+    fig3d = plt.figure(figsize=(11, 9))
+    ax3d = fig3d.add_subplot(111, projection="3d")
+    sc3d = ax3d.scatter(X[:, 0], X[:, 1], X[:, 2], c=theta, cmap="viridis", s=8,
+                        alpha=0.85, linewidths=0)
+    fig3d.colorbar(sc3d, ax=ax3d, label="theta (colatitude)", shrink=0.6, pad=0.08)
+    rng3d = np.random.RandomState(0)
+    idx3d = rng3d.choice(n, size=min(200, n), replace=False)
+    bn_omega = np.linalg.norm(omega, axis=1)
+    # pick a scale so the median arrow spans ~5% of X's own extent, visible either way.
+    x_extent = np.ptp(X, axis=0).max()
+    scale3d = (0.05 * x_extent / max(np.median(bn_omega), 1e-8)) if bn_omega.max() > 0 else 1.0
+    ax3d.quiver(X[idx3d, 0], X[idx3d, 1], X[idx3d, 2],
+                omega[idx3d, 0] * scale3d, omega[idx3d, 1] * scale3d, omega[idx3d, 2] * scale3d,
+                color="k", alpha=0.7, linewidth=1.0, arrow_length_ratio=0.3)
+    ax3d.set_title(f"Sphere (ambient X, n={n}) with DERIVED omega field "
+                    f"(exaggerated x{scale3d:.2g})", fontsize=11)
+    ax3d.set_xlabel("x"); ax3d.set_ylabel("y"); ax3d.set_zlabel("z")
+    fig3d.tight_layout()
+    fig3d.savefig(f"{args.out}_3d_field.png", dpi=150)
+    if not args.quiet:
+        print(f"wrote {args.out}_3d_field.png")
 
-    out = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=args.neg,
-                            n_epochs=apply_epochs, use_drift=True, B_fixed=B_fixed,
-                            d=args.proj_dim, Y_init_override=Y_init,
-                            clip_delta=args.clip_delta,
-                            use_gravity=args.gravity, gravity_strength=args.gravity_strength,
-                            gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
-                            use_virtual_neighbor=not args.no_virtual_neighbor,
-                            ramp=args.ramp, seed=args.seed,
-                            snapshot_every=apply_snapshot_every, verbose=not args.quiet,
-                            force_model=args.force_model, fr_k=args.fr_k,
-                            negative_sampling=args.neg_sampling, D_geo=D_geo)
+    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+                               locate_epochs=args.locate_epochs, epochs=args.epochs,
+                               clip_delta=args.clip_delta, use_gravity=args.gravity,
+                               gravity_strength=args.gravity_strength,
+                               gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
+                               use_virtual_neighbor=not args.no_virtual_neighbor,
+                               proj_dim=args.proj_dim, adjacency=args.adjacency,
+                               snapshot_every=args.snapshot_every, ramp=args.ramp,
+                               seed=args.seed, verbose=not args.quiet,
+                               apply_step=not args.init_only,
+                               normalize_drift_by_asymmetry=args.normalize,
+                               force_model=args.force_model, fr_k=args.fr_k,
+                               negative_sampling=args.neg_sampling)
+    Y, B = result["Y"], result["B"]
 
-    if args.init_only:
-        Y, B = out["snapshots"][0]["Y"], out["snapshots"][0]["B"]
-    else:
-        Y, B = out["Y"], out["B"]
-
-    # ---- plot --------------------------------------------------------
-    # [OURS 2026-08-20] proj_dim==3 -> 3D scatter
-    # + 3D quiver; proj_dim==2 -> unchanged original 2D plot.
+    # ---- plot ------------------------------------------------------------
     bn = np.linalg.norm(B, axis=1)
     big = np.argsort(bn)[::-1][:200]
     if args.proj_dim == 3:
@@ -181,9 +151,6 @@ def main():
             ax.quiver(Y[big, 0], Y[big, 1], Y[big, 2],
                       B[big, 0] * sc_scale, B[big, 1] * sc_scale, B[big, 2] * sc_scale,
                       color="k", alpha=0.6, linewidth=1.0, arrow_length_ratio=0.3)
-        # [OURS 2026-08-20] matplotlib's DEFAULT 3D
-        # tick/box axes, matching FinslerMDS's utils.plot_points -- no manual
-        # origin-crossing lines, no set_xticks([]) hiding. Numbers stay on.
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2"); ax.set_zlabel("dim 3")
     else:
         fig, ax = plt.subplots(figsize=(9, 8))
@@ -195,20 +162,24 @@ def main():
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
-    drift_label = ("frozen B (from D_asym asymmetry at Y_init only)" if args.fixed_drift
-                   else "live B (from D_asym asymmetry only)")
-    init_suffix = ", INIT ONLY (no training)" if args.init_only else f", epochs={args.epochs}"
-    ax.set_title(f"Randers-UMAP sphere, isumap-derived D, {drift_label}{init_suffix}  (n={args.n})", fontsize=11)
+    if args.init_only:
+        ax.set_title(f"Randers Force-Directed Layout sphere, isumap D + DERIVED high-dim omega, "
+                     f"LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
+    else:
+        ax.set_title(f"Randers Force-Directed Layout sphere, isumap D + DERIVED high-dim omega, "
+                     f"located-drift init  (n={n}, epochs={args.epochs})", fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 
-    np.savez(f"{args.out}.npz", Y=Y, B=B, theta=theta, phi=phi, X=X)
+    np.savez(f"{args.out}.npz", Y=Y, B=B, theta=theta, phi=phi, X=X, omega=omega,
+             asymmetry_score=result.get("asymmetry_score", np.nan),
+             asymmetry_per_node=result.get("asymmetry_per_node", np.array([])))
 
     if not args.quiet:
         print(f"\nwrote {args.out}.png and {args.out}.npz")
 
     if args.snapshot_every is not None and not args.init_only:
-        snaps = out["snapshots"]
+        snaps = result["snapshots"]
         n_snap = len(snaps)
         ncols = min(n_snap, 6)
         nrows = int(np.ceil(n_snap / ncols))
@@ -255,8 +226,8 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers-UMAP sphere, isumap D, apply-step trajectory  (n={args.n}, "
-                      f"snapshot_every={args.snapshot_every})", fontsize=11)
+        fig2.suptitle(f"Randers Force-Directed Layout sphere, isumap D + derived omega, apply-step "
+                      f"trajectory  (n={n}, snapshot_every={args.snapshot_every})", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=fig2.get_axes(), label="theta (colatitude)",
                           fraction=0.02, pad=0.01)

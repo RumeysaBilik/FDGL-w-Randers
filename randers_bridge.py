@@ -25,7 +25,8 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components, shortest_path
 from scipy.spatial.distance import cdist
 
-from randers_fdgl import fdgl_low_dim, classical_mds
+from randers_fdgl import (fdgl_low_dim, classical_mds, _compute_N, compute_drift,
+                           knn_mask_from_distance_matrix)
 
 
 def compute_dist_matrix(
@@ -149,6 +150,29 @@ def compute_dist_matrix(
     if return_adjacency:
         return dist_matrix_, preds_, bln
     return dist_matrix_, preds_
+
+
+def compute_highdim_drift(X, D_asym, k, clip_delta=0.01):
+    """
+    Derives a high-dimensional drift field omega from D_asym's
+    own asymmetry, instead of the usual Y-space (embedding) live drift --
+    feeds compute_drift() the raw coordinates X in place of the current
+    embedding Y, so the k-NN direction vectors e_ij(X) live in X's own
+    m-dimensional space, not a 2D/3D projection.
+
+    Once omega is derived this way, (X, omega) is structurally identical to
+    the "generated" family's own (X, omega) pair -- the SAME fdgl_pipeline
+    can be used directly. This is the "calculated" family's entire
+    omega-derivation step 
+
+    Returns
+    -------
+    omega : (n, m) ambient-space drift field, same shape as X.
+    """
+    knn_mask = knn_mask_from_distance_matrix(D_asym, k)
+    N = _compute_N(D_asym)
+    omega = compute_drift(N, knn_mask, k, X, clip_delta=clip_delta)
+    return omega
 
 
 def asymmetry_score(D, bln=None):
@@ -277,18 +301,12 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k,
                                        randers_field=None, adjacency=adjacency)
 
-    # [OURS 2026-09-16] (real,real) block used to be plain Euclidean (via
-    # X_aug above, randers_field=None). Swap it for the symmetrized Randers
-    # geodesic instead -- 0.5*(D_asym+D_asym^T), D_asym = the same directed
-    # distance the apply step below uses -- so the locate step actually
-    # reflects the Randers structure on the real points, not just on the
-    # real-virtual/virtual-virtual links. Only the real-real quadrant
-    # changes; the rest of D_sym_aug (built above) is untouched.
     if verbose:
         print(f"Locate: (real,real) block -> symmetrized Randers geodesic "
               f"0.5*(D_asym+D_asym^T)...")
-    D_real_asym, _ = compute_dist_matrix(X, n_neighbors=k,
-                                         randers_field=omega, adjacency=adjacency)
+    D_real_asym, _, bln_real = compute_dist_matrix(X, n_neighbors=k,
+                                         randers_field=omega, adjacency=adjacency,
+                                         return_adjacency=True)
     D_sym_aug[:n, :n] = 0.5 * (D_real_asym + D_real_asym.T)
     np.fill_diagonal(D_sym_aug, 0.0)
 
@@ -318,11 +336,11 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                 "Y_real0": Y_real0, "Y_virtual0": Y_virtual0, "B_located": B_located}
 
     # ---- apply: real D_asym, B frozen + attached ----------------------------
+   
     if verbose:
-        print(f"\nApply: building asymmetric D_asym on the {n} real points...")
-    D_asym, _, bln_asym = compute_dist_matrix(X, n_neighbors=k,
-                                    randers_field=omega, adjacency=adjacency,
-                                    return_adjacency=True)
+        print(f"\nApply: reusing the (real,real) D_asym already built in the "
+              f"locate step (same X/k/omega/adjacency -- no need to recompute)...")
+    D_asym, bln_asym = D_real_asym, bln_real
 
     # D_geo -- drift-free counterpart of D_asym, used by fdgl_low_dim
     # when randers_attractive/randers_repulsive is False (see docstring).

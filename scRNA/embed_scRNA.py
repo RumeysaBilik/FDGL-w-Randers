@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """
-embed_scRNA.py -- applies our IsUMap + Randers-UMAP pipeline (same core
-mechanism as MNIST/embed_MNIST_pca.py and BreastCancer/embed_BreastCancer.py:
-IsUMap's own distance_graph_generation for the asymmetric distance, our own
-fdgl_low_dim for the embedding, live drift B_fixed=None/use_drift=True)
-to IsUMap's own bundled scRNA-seq example dataset (colorectal cancer mouse
-model, "CRCC_AKPE_scRNASeq_2024", from
+embed_scRNA.py -- applies our own Randers Force-Directed Layout pipeline (compute_highdim_drift
++ fdgl_pipeline, the SAME mechanism run_swiss_roll_calculated.py/
+run_mammoth_calculated.py/run_sphere_calculated.py/MNIST/embed_MNIST_pca.py/
+embed_MNIST_raw.py all use) to IsUMap's own bundled scRNA-seq example dataset
+(colorectal cancer mouse model, "CRCC_AKPE_scRNASeq_2024", from
 https://github.com/LUK4S-B/IsUMap/tree/main/Dataset_files/
 scRNA_dataset-1_CRCC_AKPE_scRNASeq_2024).
 
-[OURS 2026-08-28]
+[OURS 2026-08-28, migrated 2026-09-17]
+
+[OURS 2026-09-17] Previously built D_asym directly via isumap's own
+distance_graph_generation() (IsUMap's local, pre-symmetrization asymmetric
+metric) and fed it straight into fdgl_low_dim with a live (not located)
+drift. Migrated off isumap entirely: D_asym is now built purely via
+randers_bridge.compute_dist_matrix's own directed k-NN geodesic, omega is
+derived from D_asym's own asymmetry in the 50-dim Seurat-PCA ambient space
+via randers_bridge.compute_highdim_drift, and (X, omega) is fed straight into
+fdgl_pipeline -- see MNIST/embed_MNIST_pca.py's own module docstring for the
+full rationale (same change, same tradeoff: no longer tests IsUMap's own
+asymmetric-distance mechanism, only our own pipeline applied to real data).
 
 Dataset
 -------
@@ -20,8 +30,8 @@ serve as a general high-dimensional feature input):
   - sct_pca_embeddings.csv : (n_cells, 50) SCTransform+PCA embedding,
     ALREADY dimensionality-reduced by Seurat -- used directly as X, exactly
     the same role PCA plays in embed_MNIST_pca.py's "option 2" (PCA first,
-    then IsUMap's own asymmetric distance on the reduced space), except here
-    the PCA was computed upstream by Seurat, not by us.
+    then our own pipeline on the reduced space), except here the PCA was
+    computed upstream by Seurat, not by us.
   - sct_cluster_labels.csv : (n_cells,) Seurat SNN cluster id (resolution
     0.3, 7 clusters, ids 0-6) -- used ONLY for colouring the final scatter
     plot (ground-truth-ish structure to visually check against), never fed
@@ -71,9 +81,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
-# [OURS 2026-09-15] distance_graph_generation.py now lives in
-# <FDGL root>/isumap/, not flat in ROOT -- added explicitly.
-sys.path.insert(0, os.path.join(ROOT, "isumap"))
 
 import numpy as np
 import pandas as pd
@@ -81,8 +88,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from distance_graph_generation import distance_graph_generation
-from randers_fdgl import fdgl_low_dim, arrow_scale
+from randers_fdgl import arrow_scale
+from randers_bridge import fdgl_pipeline, compute_dist_matrix, compute_highdim_drift
 
 
 def load_scrna_csv(pca_path, cluster_path):
@@ -124,49 +131,61 @@ def main():
                          "colouring only). Falls back to sct_cluster_labels_sample.csv "
                          "the same way --pca-csv does.")
     p.add_argument("--n", type=int, default=2000,
-                    help="[OURS 2026-08-28] subsample this many cells (random, seeded by "
+                    help="subsample this many cells (random, seeded by "
                          "--seed) before running the pipeline. The real dataset has 11,505 "
-                         "cells -- fdgl_low_dim's own dense (n,n,d) drift/gradient "
-                         "arrays (see compute_drift's docstring in randers_fdgl.py) scale "
-                         "as O(n^2), so n=11505 would need several GB of memory just for "
-                         "those intermediate arrays; 2000-3000 is a reasonable default for "
-                         "a single-machine run. Pass --n -1 to use every cell (only advisable "
+                         "cells -- our own dense (n,n,d) drift/gradient arrays (see "
+                         "compute_drift's docstring in randers_fdgl.py) scale as O(n^2), "
+                         "so n=11505 would need several GB of memory just for those "
+                         "intermediate arrays; 2000-3000 is a reasonable default for a "
+                         "single-machine run. Pass --n -1 to use every cell (only advisable "
                          "with a machine that has enough memory headroom).")
-    p.add_argument("--k", type=int, default=30,
-                    help="IsUMap's own distance_graph_generation neighbourhood size "
-                         "(matches the MNIST scripts' default)")
-    p.add_argument("--emb-k", type=int, default=20,
-                    help="n_neighbors for our own fdgl_low_dim's UMAP-style graph")
+    p.add_argument("--k", type=int, default=20,
+                    help="shared k: both the ambient D_asym build (compute_dist_matrix, "
+                         "for deriving omega) and fdgl_pipeline's own k-NN backbone "
+                         "(locate/apply steps).")
     p.add_argument("--neg", type=int, default=10)
     p.add_argument("--epochs", type=int, default=500)
+    p.add_argument("--locate-epochs", type=int, default=500,
+                    help="no-op -- kept for compat with fdgl_pipeline's signature.")
+    p.add_argument("--clip-delta", type=float, default=0.01,
+                    help="used both when deriving omega (compute_highdim_drift) and inside "
+                         "fdgl_pipeline's own apply step -- see compute_highdim_drift's "
+                         "docstring for the open caveat about this being an absolute "
+                         "(not X-scale-relative) cap, not yet calibrated for Seurat's own "
+                         "PCA coordinate scale.")
     p.add_argument("--snapshot-every", type=int, default=None,
                     help="if given, also save <out>_snapshots.png: the embedding every "
                          "N epochs (from init to final), side by side.")
     p.add_argument("--gravity", action="store_true",
                     help="add per-node gravity toward xi_i=y_i+b_i (Bannister et al. "
                          "f_g=gamma*M[i]*b_i), weighted by --gravity-neighbor-weight "
-                         "unless disabled. Works here since B is live (use_drift=True), "
-                         "exactly as in the MNIST/BreastCancer scripts.")
+                         "unless disabled.")
     p.add_argument("--gravity-strength", type=float, default=1.0,
                     help="gamma in Bannister et al.'s gravity force. Only matters with "
                          "--gravity.")
     p.add_argument("--no-gravity-neighbor-weight", action="store_true",
                     help="disable the neighbour-plausibility weighting (revert to the "
                          "old unconditional gravity pull). Only matters with --gravity.")
+    p.add_argument("--no-virtual-neighbor", action="store_true",
+                    help="[default ON] each node's own virtual point xi_i=y_i+b_i is an "
+                         "unconditional (k+1)-th attractive neighbour -- pass to disable.")
     p.add_argument("--ramp", action="store_true",
                     help="ramp drift's magnitude 0->1 over epochs instead of applying it "
-                         "at full strength from epoch 0 (off by default, matching the "
-                         "other run_*.py/embed_*.py scripts' own --ramp convention).")
+                         "at full strength from epoch 0. Off by default.")
+    p.add_argument("--normalize", action="store_true",
+                    help="see fdgl_low_dim's scale_B_fixed_by_knn_distance docstring.")
     p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
-                    help="[OURS 2026-09-02] attraction/repulsion law passed to fdgl_low_dim "
-                         "-- 'fr_gravity' (default) = Bannister et al.'s spring/inverse-square "
-                         "law, 'umap' = UMAP's own fitted (a,b)-curve.")
+                    help="attraction/repulsion law -- 'fr_gravity' (default) = Bannister et "
+                         "al.'s spring/inverse-square law, 'umap' = UMAP's own fitted (a,b)-curve.")
     p.add_argument("--fr-k", type=float, default=None,
-                    help="[OURS 2026-09-02] natural edge-length constant for force_model="
-                         "fr_gravity (default None -> 1/sqrt(n)). Ignored for force_model=umap.")
+                    help="natural edge-length constant for force_model=fr_gravity "
+                         "(default None -> 1/sqrt(n)). Ignored for force_model=umap.")
     p.add_argument("--neg-sampling", action="store_true",
-                    help="[OURS 2026-09-02] use TRUE stochastic negative sampling for repulsion "
-                         "instead of the dense/exact sum.")
+                    help="use TRUE stochastic negative sampling for repulsion instead of "
+                         "the dense/exact sum.")
+    p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3])
+    p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn")
+    p.add_argument("--init-only", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="scrna_embedding")
     p.add_argument("--quiet", action="store_true")
@@ -215,56 +234,41 @@ def main():
         print(f"Using n={n} cells "
               f"({'full dataset' if n == X_full.shape[0] else f'subsampled from {X_full.shape[0]}'})")
 
-    # ---- IsUMap's own local, pre-symmetrization asymmetric distance -------
-    isumap_dist = distance_graph_generation(
-        X, k=args.k, normalize=True, distBeyondNN=True, verbose=verbose,
-        dataIsDistMatrix=False, dataIsGeodesicDistMatrix=False, saveDistMatrix=False,
-    )
-    asymm_distance = isumap_dist[0]
-
-    # [OURS 2026-08-28] same i==j fix as MNIST/embed_MNIST_{pca,raw}.py and
-    # BreastCancer/embed_BreastCancer.py -- comp_graph()'s key (i,j,k) means
-    # "distance from j to k, as measured in neighbourhood i"; the real,
-    # directly-measured i-to-neighbour distance only appears when i==j.
-    D_sparse = np.full((n, n), np.inf)
-    np.fill_diagonal(D_sparse, 0.0)
-    for (i, j, kk), value in asymm_distance.items():
-        if i == j:
-            D_sparse[i, kk] = value
-
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.csgraph import shortest_path
-    rows, cols = np.nonzero(np.isfinite(D_sparse) & (D_sparse > 0))
-    nbg = csr_matrix((D_sparse[rows, cols], (rows, cols)), shape=(n, n))
-    D_asym, _ = shortest_path(nbg, method="auto", directed=True, return_predecessors=True)
-
-    is_symmetric = np.allclose(D_asym, D_asym.T)
     if verbose:
-        n_inf = (~np.isfinite(D_asym)).sum()
-        print(f"D_asym: {D_asym.shape}  symmetric={is_symmetric}  (should be False)  "
-              f"unreachable pairs={n_inf}")
+        print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
+              f"(directed knn adjacency, no field)...")
+    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None,
+                                     directed=True, adjacency="knn")
+    if verbose:
+        print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}")
+
+    if verbose:
+        print(f"\nDeriving AMBIENT-space (50-dim Seurat PCA) omega from D_asym's own "
+              f"asymmetry (compute_highdim_drift)...")
+    omega = compute_highdim_drift(X, D_asym, args.k, clip_delta=args.clip_delta)
+    if verbose:
+        bn0 = np.linalg.norm(omega, axis=1)
+        print(f"omega (derived, ambient): mean||omega||={bn0.mean():.4f}  "
+              f"max||omega||={bn0.max():.4f}  (X itself spans "
+              f"~{np.ptp(X, axis=0).max():.1f} units per axis -- compare scale)")
 
     np.save(os.path.join(save_dir, "asymm_matrix_scrna.npy"), D_asym)
     np.save(os.path.join(save_dir, "labels_scrna.npy"), y)
 
-    # ---- embed with our own fdgl_low_dim -------------------------------
-    # Live drift, B_fixed=None -- same mechanism as MNIST/BreastCancer, and
-    # per the 2026-08-28 discussion this is the CURRENT, explicitly-chosen
-    # design for real (non-synthetic) datasets in this project, not a
-    # frozen/located B (that hybrid was tried in the isumap scripts and
-    # explicitly reverted -- see run_swiss_roll_calculated.py's own comments).
-    with np.errstate(invalid="ignore", divide="ignore"):
-        out = fdgl_low_dim(D_asym, n_neighbors=args.emb_k, n_negative_samples=args.neg,
-                                n_epochs=args.epochs, use_drift=True, B_fixed=None,
-                                snapshot_every=args.snapshot_every,
-                                use_gravity=args.gravity,
-                                gravity_strength=args.gravity_strength,
-                                gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
-                                ramp=args.ramp,
-                                force_model=args.force_model, fr_k=args.fr_k,
-                                negative_sampling=args.neg_sampling,
-                                seed=args.seed, verbose=verbose)
-    Y, B = out["Y"], out["B"]
+    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+                               locate_epochs=args.locate_epochs, epochs=args.epochs,
+                               clip_delta=args.clip_delta, use_gravity=args.gravity,
+                               gravity_strength=args.gravity_strength,
+                               gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
+                               use_virtual_neighbor=not args.no_virtual_neighbor,
+                               proj_dim=args.proj_dim, adjacency=args.adjacency,
+                               snapshot_every=args.snapshot_every, ramp=args.ramp,
+                               seed=args.seed, verbose=verbose,
+                               apply_step=not args.init_only,
+                               normalize_drift_by_asymmetry=args.normalize,
+                               force_model=args.force_model, fr_k=args.fr_k,
+                               negative_sampling=args.neg_sampling)
+    Y, B = result["Y"], result["B"]
 
     n_clusters = int(y.max()) + 1
 
@@ -281,19 +285,21 @@ def main():
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"Randers-UMAP on scRNA (CRCC_AKPE, 50D Seurat PCA, n={n}, epochs={args.epochs})", fontsize=10)
+    ax.set_title(f"Randers Force-Directed Layout on scRNA (CRCC_AKPE, 50D Seurat PCA, DERIVED high-dim "
+                 f"omega, n={n}, epochs={args.epochs})", fontsize=10)
     fig.tight_layout()
     out_path = os.path.join(save_dir, f"{args.out}.png")
     fig.savefig(out_path, dpi=150)
 
-    np.savez(os.path.join(save_dir, f"{args.out}.npz"), Y=Y, B=B, labels=y, barcodes=barcodes)
+    np.savez(os.path.join(save_dir, f"{args.out}.npz"), Y=Y, B=B, labels=y, barcodes=barcodes,
+             omega=omega, asymmetry_score=result.get("asymmetry_score", np.nan))
 
     if verbose:
         print(f"\nwrote {out_path} and {args.out}.npz (in {save_dir})")
 
     # ---- snapshot grid: init -> every N epochs -> final, side by side -----
-    if args.snapshot_every is not None:
-        snaps = out["snapshots"]
+    if args.snapshot_every is not None and not args.init_only:
+        snaps = result["snapshots"]
         n_snap = len(snaps)
         ncols = min(n_snap, 6)
         nrows = int(np.ceil(n_snap / ncols))
@@ -313,7 +319,7 @@ def main():
         for idx in range(n_snap, nrows * ncols):
             axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers-UMAP on scRNA, training trajectory "
+        fig2.suptitle(f"Randers Force-Directed Layout on scRNA, training trajectory "
                       f"(n={n}, snapshot_every={args.snapshot_every})", fontsize=11)
         snap_path = os.path.join(save_dir, f"{args.out}_snapshots.png")
         fig2.savefig(snap_path, dpi=150)

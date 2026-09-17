@@ -137,7 +137,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dataset", choices=sorted(DATASET_MAKERS.keys()), default="swiss_roll",
-                    help="[OURS 2026-08-28] which dataset's make_*_randers() to run this "
+                    help="which dataset's make_*_randers() to run this "
                          "check against -- all four share the exact same located-drift "
                          "mechanism (fdgl_pipeline, imported from run_swiss_roll_generated.py), "
                          "so the same check applies unchanged to any of them.")
