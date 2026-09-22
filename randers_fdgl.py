@@ -179,21 +179,65 @@ def arrow_scale(Y: np.ndarray, bn: np.ndarray, frac: float = 0.12) -> float:
     return frac * extent / bn_max if bn_max > 0 else 0.0
 
 
+def plot_caption(dataset: str, family: str, n: int, k: int, B_fixed: bool,
+                  epochs: int = None, init_only: bool = False) -> str:
+    """
+    Standard two-line title for a trained-embedding plot, shared across every
+    run_*.py / embed_*.py driver script so all result plots report the same
+    fields in the same order.
+
+    Line 1: "<dataset> (<family>), n=<n>"
+    Line 2: "B=frozen|live | epochs=<epochs>|init-only | k=<k> | N=(D-D')/(D+D'+eps)"
+
+    The N formula shown matches _compute_N()'s current, active formula
+    above: the bounded [-1,1] ratio (D-D')/(D+D'+eps). Keep this string in
+    sync if _compute_N() is ever changed back to the squared-numerator
+    variant.
+    """
+    line1 = f"{dataset} ({family}), n={n}"
+    b_str = "live" if not B_fixed else "frozen"
+    epoch_str = "init-only" if init_only else f"{epochs}"
+    line2 = (f"B={b_str} | epochs={epoch_str} | k={k} | "
+             f"N=(D-D')/(D+D'+ε)")
+    return line1 + "\n" + line2
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Drift vector: recomputed from the live embedding every epoch
 # ─────────────────────────────────────────────────────────────────────────────
-def _compute_N(D_asym: np.ndarray) -> np.ndarray:
+def _compute_N(D_asym: np.ndarray, knn_mask: np.ndarray = None) -> np.ndarray:
     """
     Per-pair asymmetry signal feeding compute_drift(), bounded in [-1,1]:
         N[i,j] = (D[i,j] - D[j,i]) / (D[i,j] + D[j,i] + eps)
     Fixed, computed once from D_asym (not re-derived per epoch).
-    
+
+    Fill value for a missing (inf) directed entry D_asym[i,j]: node i's own
+    farthest finite k-NN neighbour distance (row i's max over knn_mask[i,:]
+    & finite), NOT a single global diameter shared by the whole matrix.
+    Per-node local scale, since a global diameter fill (the old behaviour)
+    can be orders of magnitude larger than a node's typical neighbour
+    distance, letting one missing pair dominate compute_drift's per-node
+    average and saturate its clip. Falls back to the global finite max for
+    any row with no finite knn_mask entry, or if knn_mask isn't given.
     """
+    n = D_asym.shape[0]
     finite = np.isfinite(D_asym)
-    diam = D_asym[finite].max() if finite.any() else 1.0
-    diam_fill = diam * (1.0 + 1e-6) if diam > 0 else 1e-6
-    D_filled = np.where(finite, D_asym, diam_fill)
-    N = (D_filled**2 - D_filled.T**2) / (D_filled + D_filled.T + 1e-12)
+    global_fallback = D_asym[finite].max() if finite.any() else 1.0
+
+    if knn_mask is not None:
+        local_finite = finite & knn_mask
+        has_local = local_finite.any(axis=1)
+        masked = np.where(local_finite, D_asym, -np.inf)
+        row_max = masked.max(axis=1)
+        row_max = np.where(has_local, row_max, global_fallback)
+    else:
+        row_max = np.full(n, global_fallback)
+
+    row_fill = np.where(row_max > 0, row_max * (1.0 + 1e-6), 1e-6)
+    fill_matrix = np.broadcast_to(row_fill[:, np.newaxis], D_asym.shape)
+    D_filled = np.where(finite, D_asym, fill_matrix)
+
+    N = (D_filled - D_filled.T) / (D_filled + D_filled.T + 1e-12)
     both_missing = ~finite & ~finite.T
     return np.where(both_missing, 0.0, N)
 
@@ -222,10 +266,10 @@ def compute_drift(N: np.ndarray, knn_mask: np.ndarray, k: int,
 
     weight = np.where(knn_mask, N, 0.0)                      # (n,n)
     b = (1.0 / k) * (weight[:, :, np.newaxis] * e).sum(axis=1)   # (n,d)
-    
-    # limit = 1.0 - clip_delta
-    # norms = np.linalg.norm(b, axis=1, keepdims=True)
-    # b = b * np.where(norms > limit, limit / np.maximum(norms, 1e-12), 1.0)
+
+    limit = 1.0 - clip_delta
+    norms = np.linalg.norm(b, axis=1, keepdims=True)
+    b = b * np.where(norms > limit, limit / np.maximum(norms, 1e-12), 1.0)
 
     if magnitude_target is not None:
         bnorm = np.linalg.norm(b, axis=1, keepdims=True)
@@ -383,7 +427,7 @@ def fdgl_low_dim(
     A_rep = A if randers_repulsive else A_geo
 
     a, b_param = find_ab_params(spread=spread, min_dist=min_dist)
-    N = _compute_N(D_asym)
+    N = _compute_N(D_asym, knn_mask=knn_mask)
 
     # force_model="fr_gravity" setup -- fixed edge set/k, computed once.
 

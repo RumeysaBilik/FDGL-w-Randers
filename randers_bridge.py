@@ -37,6 +37,7 @@ def compute_dist_matrix(
         directed=None,
         adjacency="knn",
         return_adjacency=False,
+        dataIsDistMatrix=False,
 ):
     """
     Shortest-path step always uses Dijkstra: every caller in this repo
@@ -46,7 +47,8 @@ def compute_dist_matrix(
 
     Parameters
     ----------
-    X             : (n, m) raw coordinates
+    X             : (n, m) raw coordinates, or (n, n) precomputed pairwise
+                    distances if dataIsDistMatrix=True.
     n_neighbors   : target neighbour count (adjacency="threshold" derives
                     an eps from this so every point has >= n_neighbors
                     neighbours; adjacency="knn" uses it as the actual
@@ -59,13 +61,24 @@ def compute_dist_matrix(
                     "threshold" -- connect i,j iff dist(i,j) < eps;
                     symmetric by construction.
     randers_field : (n, m) per-point drift vector omega_i, or None for the
-                    plain Isomap-style geodesic distance
+                    plain Isomap-style geodesic distance. Requires actual
+                    coordinates (dataIsDistMatrix=False) -- the Randers
+                    injection below needs X[cols]-X[rows].
     directed      : bool or None. None (default): directed iff
                     randers_field is given, undirected otherwise.
     return_adjacency : bool, default False. If True, also return `bln`,
                     the (n, n) boolean direct-neighbour mask (needed by
                     asymmetry_score(), since dense D_asym alone doesn't
                     show which pairs were real edges).
+    dataIsDistMatrix : bool, default False. If True, X is already an
+                    (n, n) pairwise distance/dissimilarity matrix (e.g. one
+                    that has no underlying coordinate representation at
+                    all, such as a behavioral proximity matrix) -- the
+                    cdist step below is skipped and X is used directly as
+                    the dense distance matrix that gets knn-sparsified and
+                    Dijkstra-completed. Only makes sense combined with
+                    randers_field=None, since there is no X to compute
+                    X[cols]-X[rows] from.
 
     Returns
     -------
@@ -74,7 +87,7 @@ def compute_dist_matrix(
     bln          : (n, n) bool ndarray, only returned if return_adjacency=True
     """
     n = X.shape[0]
-    dist = cdist(X, X, metric=metric)
+    dist = X.copy() if dataIsDistMatrix else cdist(X, X, metric=metric)
     np.fill_diagonal(dist, np.inf)  # exclude self so eps auto-derivation below ignores it
 
     if adjacency == "knn":
@@ -170,7 +183,7 @@ def compute_highdim_drift(X, D_asym, k, clip_delta=0.01):
     omega : (n, m) ambient-space drift field, same shape as X.
     """
     knn_mask = knn_mask_from_distance_matrix(D_asym, k)
-    N = _compute_N(D_asym)
+    N = _compute_N(D_asym, knn_mask=knn_mask)
     omega = compute_drift(N, knn_mask, k, X, clip_delta=clip_delta)
     return omega
 
@@ -238,7 +251,8 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       apply_step=True,
                       normalize_drift_by_asymmetry=False,
                       force_model="fr_gravity", fr_k=None, negative_sampling=False,
-                      randers_attractive=True, randers_repulsive=False):
+                      randers_attractive=True, randers_repulsive=False,
+                      B_fixed=True):
     """
     The full two-step "located drift" pipeline: builds D_asym from (X, omega)
     and trains an embedding with a frozen drift vector B.
@@ -283,6 +297,15 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         D_asym build, no training -- and return "Y"/"B" set to the raw
         locate-step output (Y_real0/B_located). Used for a quick
         "--init-only" mode.
+
+    B_fixed : bool, default True. If True (current default), B_located is
+        frozen for the whole apply step -- forwarded to fdgl_low_dim as
+        its own B_fixed=B_located, exactly as before. If False, B is
+        instead recomputed LIVE every epoch from the current, training Y
+        (fdgl_low_dim's use_drift=True, B_fixed=None) -- only Y_real0 (the
+        locate step's placement) is kept, as the apply step's starting
+        position; B's direction AND magnitude both evolve during training
+        instead of staying at their located value.
 
     Returns
     -------
@@ -352,10 +375,11 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
         print(f"asymmetry_score: global={asym_global:.4f}  "
               f"(mean |d_ij-d_ji|, in D_asym's own units, averaged over each "
               f"node's real neighbours, then over all nodes -- 0 = fully symmetric)")
+        print(f"B mode: {'frozen (B_located)' if B_fixed else 'live (recomputed every epoch from the current Y)'}")
 
     out2 = fdgl_low_dim(D_asym, n_neighbors=emb_k, n_negative_samples=neg,
                             n_epochs=epochs, use_drift=True, d=proj_dim,
-                            B_fixed=B_located, Y_init_override=Y_real0,
+                            B_fixed=B_located if B_fixed else None, Y_init_override=Y_real0,
                             use_gravity=use_gravity, gravity_strength=gravity_strength,
                             gravity_neighbor_weight=gravity_neighbor_weight,
                             use_virtual_neighbor=use_virtual_neighbor, ramp=ramp,

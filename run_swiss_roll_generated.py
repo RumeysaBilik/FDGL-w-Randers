@@ -37,7 +37,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from randers_bridge import compute_dist_matrix, asymmetry_score, fdgl_pipeline
-from randers_fdgl import fdgl_low_dim, classical_mds, arrow_scale
+from randers_fdgl import fdgl_low_dim, classical_mds, arrow_scale, plot_caption
 
 
 def make_swiss_roll_randers(n, seed=42):
@@ -110,6 +110,13 @@ def main():
                          "located B has extreme (clipped) entries for many nodes -- full "
                          "strength from epoch 0 can fling those nodes out immediately, "
                          "producing central-collapse-plus-outliers instead of a smooth unroll.")
+    p.add_argument("--live-drift", action="store_true",
+                    help="[default OFF] B is frozen at its located value (B_located) for "
+                         "the whole apply step -- fdgl_pipeline's B_fixed=True. Pass this "
+                         "flag to instead recompute B LIVE every epoch from the current, "
+                         "training Y (B_fixed=False) -- only Y_real0 (the locate step's "
+                         "placement) is kept as the apply step's starting position; B's "
+                         "direction AND magnitude both evolve during training.")
     p.add_argument("--init-only", action="store_true",
                     help="stop after the locate step -- skip the "
                          "force-directed apply/training step entirely, and just plot/save "
@@ -209,7 +216,8 @@ def main():
                                apply_step=not args.init_only,
                                normalize_drift_by_asymmetry=args.normalize,
                                force_model=args.force_model, fr_k=args.fr_k,
-                               negative_sampling=args.neg_sampling)
+                               negative_sampling=args.neg_sampling,
+                               B_fixed=not args.live_drift)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
@@ -238,11 +246,8 @@ def main():
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
-    if args.init_only:
-        ax.set_title(f"Randers Force-Directed Layout swiss-roll, LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
-    else:
-        ax.set_title(f"Randers Force-Directed Layout swiss-roll, located-drift init  "
-                     f"(n={n}, epochs={args.epochs})", fontsize=11)
+    ax.set_title(plot_caption("Swiss roll", "generated", n, args.k, not args.live_drift,
+                               epochs=args.epochs, init_only=args.init_only), fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 
@@ -305,8 +310,9 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers Force-Directed Layout swiss-roll, apply-step trajectory  (n={n}, "
-                      f"snapshot_every={args.snapshot_every})", fontsize=11)
+        fig2.suptitle(plot_caption("Swiss roll", "generated", n, args.k, not args.live_drift,
+                                    epochs=args.epochs) +
+                      f" | snapshot_every={args.snapshot_every}", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=fig2.get_axes(), label="t (intrinsic coordinate)",
                           fraction=0.02, pad=0.01)

@@ -88,7 +88,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from randers_fdgl import arrow_scale
+from randers_fdgl import arrow_scale, plot_caption
 from randers_bridge import fdgl_pipeline, compute_dist_matrix, compute_highdim_drift
 
 
@@ -285,8 +285,8 @@ def main():
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"Randers Force-Directed Layout on scRNA (CRCC_AKPE, 50D Seurat PCA, DERIVED high-dim "
-                 f"omega, n={n}, epochs={args.epochs})", fontsize=10)
+    ax.set_title(plot_caption("scRNA (CRCC_AKPE, 50D Seurat PCA)", "calculated", n, args.k,
+                               True, epochs=args.epochs, init_only=args.init_only), fontsize=10)
     fig.tight_layout()
     out_path = os.path.join(save_dir, f"{args.out}.png")
     fig.savefig(out_path, dpi=150)
@@ -319,8 +319,9 @@ def main():
         for idx in range(n_snap, nrows * ncols):
             axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers Force-Directed Layout on scRNA, training trajectory "
-                      f"(n={n}, snapshot_every={args.snapshot_every})", fontsize=11)
+        fig2.suptitle(plot_caption("scRNA (CRCC_AKPE, 50D Seurat PCA)", "calculated", n, args.k,
+                                    True, epochs=args.epochs) +
+                      f" | snapshot_every={args.snapshot_every}", fontsize=11)
         snap_path = os.path.join(save_dir, f"{args.out}_snapshots.png")
         fig2.savefig(snap_path, dpi=150)
         if verbose:

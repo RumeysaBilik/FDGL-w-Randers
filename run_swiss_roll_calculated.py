@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-run_swiss_roll_calculated_new.py -- derive a high-dimensional drift 
-field from D_asym's own asymmetry. Once that omega exists, (X, omega) 
-is structurally identical to the "generated" family's own (X, omega) pair 
--- so this script feeds it straight into randers_bridge.fdgl_pipeline, 
-the EXACT SAME pipeline run_swiss_roll_generated.py uses. 
-
+run_swiss_roll_calculated.py -- derive a high-dimensional drift
+field from D_asym's own asymmetry. Once that omega exists, (X, omega)
+is structurally identical to the "generated" family's own (X, omega) pair
+-- so this script feeds it straight into randers_bridge.fdgl_pipeline,
+the EXACT SAME pipeline run_swiss_roll_generated.py uses.
 
 Usage
 -----
-    python run_swiss_roll_calculated_new.py
-    python run_swiss_roll_calculated_new.py --n 2000 --epochs 500
+    python run_swiss_roll_calculated.py
+    python run_swiss_roll_calculated.py --n 2000 --epochs 500
 
 Outputs
 -------
@@ -32,7 +31,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from randers_bridge import fdgl_pipeline, compute_dist_matrix, compute_highdim_drift
-from randers_fdgl import arrow_scale
+from randers_fdgl import arrow_scale, plot_caption
+from legacy_isumap_dist_matrix import dijkstra_only_dist_matrix
 
 
 def make_swiss_roll(n, seed=42):
@@ -73,6 +73,13 @@ def main():
                          "unconditional (k+1)-th attractive neighbour -- pass to disable.")
     p.add_argument("--snapshot-every", type=int, default=None)
     p.add_argument("--ramp", action="store_true")
+    p.add_argument("--live-drift", action="store_true",
+                    help="[default OFF] B is frozen at its located value (B_located) for "
+                         "the whole apply step -- fdgl_pipeline's B_fixed=True. Pass this "
+                         "flag to instead recompute B LIVE every epoch from the current, "
+                         "training Y (B_fixed=False) -- only Y_real0 (the locate step's "
+                         "placement) is kept as the apply step's starting position; B's "
+                         "direction AND magnitude both evolve during training.")
     p.add_argument("--init-only", action="store_true")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3])
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn",
@@ -84,9 +91,10 @@ def main():
     p.add_argument("--fr-k", type=float, default=None)
     p.add_argument("--neg-sampling", action="store_true")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--out", default="swiss_embedding_calculated_new")
+    p.add_argument("--out", default="swiss_embedding_calculated")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
+    verbose = not args.quiet
 
     if not args.quiet:
         print(f"Generating swiss roll: n={args.n}")
@@ -97,8 +105,9 @@ def main():
         print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
               f"(directed knn adjacency, no isumap normalization, no field)...")
 
-    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None,
-                                     directed=True, adjacency="knn")
+    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None, directed=True, adjacency="knn")
+    #D_asym = dijkstra_only_dist_matrix(X, k=args.k, verbose=verbose, directedDistances=True)
+
     emb_k = args.k
     if not args.quiet:
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}  "
@@ -149,7 +158,8 @@ def main():
                                apply_step=not args.init_only,
                                normalize_drift_by_asymmetry=args.normalize,
                                force_model=args.force_model, fr_k=args.fr_k,
-                               negative_sampling=args.neg_sampling)
+                               negative_sampling=args.neg_sampling,
+                               B_fixed=not args.live_drift)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ------------------------------------------------------------
@@ -177,12 +187,8 @@ def main():
                       color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
         ax.set_xlabel("dim 1"); ax.set_ylabel("dim 2")
 
-    if args.init_only:
-        ax.set_title(f"Randers Force-Directed Layout swiss-roll, isumap D + DERIVED high-dim omega, "
-                     f"LOCATED INIT ONLY (no training)  (n={n})", fontsize=11)
-    else:
-        ax.set_title(f"Randers Force-Directed Layout swiss-roll, isumap D + DERIVED high-dim omega, "
-                     f"located-drift init  (n={n}, epochs={args.epochs})", fontsize=11)
+    ax.set_title(plot_caption("Swiss roll", "calculated", n, args.k, not args.live_drift,
+                               epochs=args.epochs, init_only=args.init_only), fontsize=11)
     fig.tight_layout()
     fig.savefig(f"{args.out}.png", dpi=150)
 
@@ -243,9 +249,9 @@ def main():
             for idx in range(n_snap, nrows * ncols):
                 axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers Force-Directed Layout swiss-roll, isumap D + derived omega, "
-                      f"apply-step trajectory  (n={n}, "
-                      f"snapshot_every={args.snapshot_every})", fontsize=11)
+        fig2.suptitle(plot_caption("Swiss roll", "calculated", n, args.k, not args.live_drift,
+                                    epochs=args.epochs) +
+                      f" | snapshot_every={args.snapshot_every}", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=fig2.get_axes(), label="t (intrinsic coordinate)",
                           fraction=0.02, pad=0.01)

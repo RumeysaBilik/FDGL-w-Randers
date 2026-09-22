@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
 """
 embed_MNIST_raw.py -- the "raw 784-dim" variant of MNIST + our own
-Randers Force-Directed Layout pipeline, per the advisor's first suggested approach ([OURS
-2026-08-26] "hocam demisti ki MNIST'i uygulamanin iki yolu var: 1) direkt
-28x28'lik dimensiondan baslayip metodumuzu uygulamak, 2) once lower
-dimension'a cekip sonra metodumuzu uygulamak" -- this file implements
-option 1, the controlled counterpart to embed_MNIST_pca.py's option 2).
-
-[OURS 2026-09-17] Migrated off isumap's own build_isumap_dist_matrix/
-isumap_style_init/fdgl_low_dim-direct pipeline, onto the same
-compute_highdim_drift + fdgl_pipeline approach embed_MNIST_pca.py /
-run_swiss_roll_calculated.py / run_mammoth_calculated.py / run_sphere_calculated.py
-now use -- see embed_MNIST_pca.py's own module docstring for the full
-rationale. This script is still the controlled A/B counterpart to
-embed_MNIST_pca.py: only the ambient dimensionality the omega field is
-derived from differs (raw 784 here vs. PCA-reduced there), everything else
-is byte-for-byte the same mechanism.
-
-[OURS 2026-09-17] Also no longer imports anything from isumap/ at all --
-load_MNIST now comes from mnist_loader.py (a self-contained copy of
-isumap/data_and_plots.py's own load_MNIST, minus the unconditional
-`import torchvision` that file carries purely for its own unrelated
-load_CIFAR_10, never used in this project). This script no longer needs
-torchvision installed.
+Randers Force-Directed Layout pipeline
 
 Usage
 -----
@@ -45,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from mnist_loader import load_MNIST
-from randers_fdgl import arrow_scale
+from randers_fdgl import arrow_scale, plot_caption
 from randers_bridge import fdgl_pipeline, compute_dist_matrix, compute_highdim_drift
 from sphere_view import stereographic_project
 
@@ -104,6 +83,13 @@ def main():
                          "post-training visualization. Off by default.")
     p.add_argument("--proj-dim", type=int, default=2, choices=[2, 3])
     p.add_argument("--adjacency", choices=["threshold", "knn"], default="knn")
+    p.add_argument("--live-drift", action="store_true",
+                    help="[default OFF] B is frozen at its located value (B_located) for "
+                         "the whole apply step -- fdgl_pipeline's B_fixed=True. Pass this "
+                         "flag to instead recompute B LIVE every epoch from the current, "
+                         "training Y (B_fixed=False) -- only Y_real0 (the locate step's "
+                         "placement) is kept as the apply step's starting position; B's "
+                         "direction AND magnitude both evolve during training.")
     p.add_argument("--init-only", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_raw_embedding")
@@ -156,7 +142,8 @@ def main():
                                apply_step=not args.init_only,
                                normalize_drift_by_asymmetry=args.normalize,
                                force_model=args.force_model, fr_k=args.fr_k,
-                               negative_sampling=args.neg_sampling)
+                               negative_sampling=args.neg_sampling,
+                               B_fixed=not args.live_drift)
     Y, B = result["Y"], result["B"]
 
     # ---- plot ---------------------------------------------------------------
@@ -172,8 +159,8 @@ def main():
                   color="k", alpha=0.6, width=0.004, scale=1, scale_units="xy")
 
     ax.set_xticks([]); ax.set_yticks([])
-    ax.set_title(f"Randers Force-Directed Layout on MNIST (raw 784D, DERIVED high-dim omega, n={n}, "
-                 f"epochs={args.epochs})", fontsize=10)
+    ax.set_title(plot_caption("MNIST (raw 784D)", "calculated", n, args.k, not args.live_drift,
+                               epochs=args.epochs, init_only=args.init_only), fontsize=10)
     fig.tight_layout()
     out_path = os.path.join(save_dir, f"{args.out}.png")
     fig.savefig(out_path, dpi=150)
@@ -241,8 +228,9 @@ def main():
         for idx in range(n_snap, nrows * ncols):
             axes[idx // ncols][idx % ncols].axis("off")
 
-        fig2.suptitle(f"Randers Force-Directed Layout on MNIST (raw 784D), training trajectory "
-                      f"(n={n}, snapshot_every={args.snapshot_every})", fontsize=11)
+        fig2.suptitle(plot_caption("MNIST (raw 784D)", "calculated", n, args.k, not args.live_drift,
+                                    epochs=args.epochs) +
+                      f" | snapshot_every={args.snapshot_every}", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=axes, label="digit", ticks=range(10), shrink=0.6)
         snap_path = os.path.join(save_dir, f"{args.out}_snapshots.png")
