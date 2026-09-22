@@ -211,33 +211,29 @@ def _compute_N(D_asym: np.ndarray, knn_mask: np.ndarray = None) -> np.ndarray:
         N[i,j] = (D[i,j] - D[j,i]) / (D[i,j] + D[j,i] + eps)
     Fixed, computed once from D_asym (not re-derived per epoch).
 
-    Fill value for a missing (inf) directed entry D_asym[i,j]: node i's own
-    farthest finite k-NN neighbour distance (row i's max over knn_mask[i,:]
-    & finite), NOT a single global diameter shared by the whole matrix.
-    Per-node local scale, since a global diameter fill (the old behaviour)
-    can be orders of magnitude larger than a node's typical neighbour
-    distance, letting one missing pair dominate compute_drift's per-node
-    average and saturate its clip. Falls back to the global finite max for
-    any row with no finite knn_mask entry, or if knn_mask isn't given.
+    Fill value for a missing (inf) directed entry: the single largest
+    finite distance among ALL nodes' k-NN edges (D_asym restricted to
+    knn_mask), not the global geodesic diameter over the whole (Dijkstra-
+    completed, dense) D_asym matrix. Still one scalar shared by the whole
+    matrix, but a much smaller one -- the geodesic diameter can be many
+    hops (multi-edge shortest paths), while this is capped at the single
+    longest direct k-NN edge in the graph. Falls back to the global finite
+    max if no knn_mask entry is finite, or if knn_mask isn't given.
     """
-    n = D_asym.shape[0]
     finite = np.isfinite(D_asym)
     global_fallback = D_asym[finite].max() if finite.any() else 1.0
 
     if knn_mask is not None:
         local_finite = finite & knn_mask
-        has_local = local_finite.any(axis=1)
-        masked = np.where(local_finite, D_asym, -np.inf)
-        row_max = masked.max(axis=1)
-        row_max = np.where(has_local, row_max, global_fallback)
+        diam = D_asym[local_finite].max() if local_finite.any() else global_fallback
     else:
-        row_max = np.full(n, global_fallback)
+        diam = global_fallback
 
-    row_fill = np.where(row_max > 0, row_max * (1.0 + 1e-6), 1e-6)
-    fill_matrix = np.broadcast_to(row_fill[:, np.newaxis], D_asym.shape)
-    D_filled = np.where(finite, D_asym, fill_matrix)
+    diam_fill = diam * (1.0 + 1e-6) if diam > 0 else 1e-6
+    D_filled = np.where(finite, D_asym, diam_fill)
 
-    N = (D_filled - D_filled.T) / (D_filled + D_filled.T + 1e-12)
+    #N = (D_filled - D_filled.T) / (D_filled + D_filled.T + 1e-12)
+    N = (D_filled**2 - D_filled.T**2) / (D_filled + D_filled.T + 1e-12)
     both_missing = ~finite & ~finite.T
     return np.where(both_missing, 0.0, N)
 

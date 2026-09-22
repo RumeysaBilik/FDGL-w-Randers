@@ -131,10 +131,15 @@ def main():
     #          f"(knn -> normalize -> raw star graph -> real Dijkstra, t-conorm/phi merge excluded)...")
     #D_asym = dijkstra_only_dist_matrix(X_pca, k=args.k, verbose=verbose,
     #                                    directedDistances=True)
+    #if verbose:
+    #    print(f"\nBuilding distance matrix via legacy_isumap_dist_matrix.build_isumap_dist_matrix "
+    #          f"(isumap star-graph, no t-conorm/Dijkstra)...")
+    #D_asym = build_isumap_dist_matrix(X_pca, k=args.k, verbose=verbose)
     if verbose:
-        print(f"\nBuilding distance matrix via legacy_isumap_dist_matrix.build_isumap_dist_matrix "
-              f"(isumap star-graph, no t-conorm/Dijkstra)...")
-    D_asym = build_isumap_dist_matrix(X_pca, k=args.k, verbose=verbose)
+        print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
+              f"(directed knn adjacency, no field)...")
+    D_asym, _ = compute_dist_matrix(X_pca, n_neighbors=args.k, randers_field=None,
+                                     directed=True, adjacency="knn")
     if verbose:
         finite = np.isfinite(D_asym)
         print(f"D_asym: {D_asym.shape}  finite entries={finite.sum()}/{D_asym.size}  "
