@@ -306,7 +306,7 @@ def fdgl_low_dim(
     snapshot_every: int = None,
     seed: int = 0,
     verbose: bool = True,
-    force_model: str = "fr_gravity",
+    force_model: str = "umap",
     fr_k: float = None,
     negative_sampling: bool = False,
 ) -> dict:

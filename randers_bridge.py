@@ -250,7 +250,7 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       snapshot_every=None, ramp=False, seed=0, verbose=True,
                       apply_step=True,
                       normalize_drift_by_asymmetry=False,
-                      force_model="fr_gravity", fr_k=None, negative_sampling=False,
+                      force_model="umap", fr_k=None, negative_sampling=False,
                       randers_attractive=True, randers_repulsive=False,
                       B_fixed=True):
     """

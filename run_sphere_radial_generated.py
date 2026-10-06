@@ -112,7 +112,7 @@ def main():
                          "current embedding, keeping its DIRECTION as located. See "
                          "fdgl_low_dim's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
-    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="umap",
                     help="see run_swiss_roll_generated.py's --force-model help -- "
                          "'fr_gravity' (NEW DEFAULT) = Bannister et al.'s own "
                          "Fruchterman-Reingold-style forces, 'umap' = original UMAP "

@@ -150,7 +150,7 @@ def main():
                          "current embedding, keeping its DIRECTION as located. See "
                          "fdgl_low_dim's scale_B_fixed_by_knn_distance docstring "
                          "for the exact mechanism.")
-    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="umap",
                     help="which attraction/"
                          "repulsion LAW drives the force-directed layout. 'fr_gravity' "
                          "(default) = Bannister et al.'s own Fruchterman-Reingold-"

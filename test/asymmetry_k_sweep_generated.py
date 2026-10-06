@@ -90,7 +90,7 @@ def _alignment(per_node_initial, per_node_final):
 
 
 def sweep_asymmetry_vs_k(X, omega, k_values, adjacency, epochs, neg, seed, verbose=True,
-                          force_model="fr_gravity", fr_k=None, negative_sampling=False):
+                          force_model="umap", fr_k=None, negative_sampling=False):
     """
     For each k in k_values, runs the FULL located-drift pipeline
     (fdgl_pipeline, apply_step=True -- real force-directed training,
@@ -124,7 +124,7 @@ def sweep_asymmetry_vs_k(X, omega, k_values, adjacency, epochs, neg, seed, verbo
 
 
 def per_node_preservation(X, omega, k, adjacency, epochs, neg, seed, min_initial=1e-3,
-                           force_model="fr_gravity", fr_k=None, negative_sampling=False):
+                           force_model="umap", fr_k=None, negative_sampling=False):
     """
     [OURS 2026-09-01] --mode distribution's core computation: ONE
     fdgl_pipeline call at a single k, then a per-node "% of target
@@ -201,7 +201,7 @@ def main():
                          "trains once PER k (n_k_values total runs); --mode distribution "
                          "trains once, total.")
     p.add_argument("--neg", type=int, default=10)
-    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="umap",
                     help="attraction/repulsion law passed to "
                          "fdgl_pipeline/fdgl_low_dim -- 'fr_gravity' (default) = "
                          "Bannister et al.'s spring/inverse-square law, 'umap' = UMAP's own "

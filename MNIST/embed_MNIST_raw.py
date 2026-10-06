@@ -68,7 +68,7 @@ def main():
                          "full strength from epoch 0. Off by default.")
     p.add_argument("--normalize", action="store_true",
                     help="see fdgl_low_dim's scale_B_fixed_by_knn_distance docstring.")
-    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="fr_gravity",
+    p.add_argument("--force-model", choices=["fr_gravity", "umap"], default="umap",
                     help="attraction/repulsion law -- 'fr_gravity' (default) = Bannister et "
                          "al.'s spring/inverse-square law, 'umap' = UMAP's own fitted (a,b)-curve.")
     p.add_argument("--fr-k", type=float, default=None,
