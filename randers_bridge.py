@@ -64,6 +64,33 @@ def compute_dist_matrix(
                     plain Isomap-style geodesic distance. Requires actual
                     coordinates (dataIsDistMatrix=False) -- the Randers
                     injection below needs X[cols]-X[rows].
+    When randers_field is None (adjacency="knn" only -- the "threshold"
+    branch has no notion of a per-point star graph), each k-NN edge's raw
+    Euclidean weight is ALWAYS first distorted by IsUMap's own per-point
+    conformal rescaling (Barth, Fahimi, Joharinad, Jost, Keck, "IsUMap",
+    2024, Algorithm 5.1 / Eq. 5.1), unconditionally, before anything else
+    (Dijkstra):
+        d_i(x_i, x_ij) = (d(x_i, x_ij) - rho_i) / sigma_i
+    rho_i = x_i's own nearest-neighbour distance (its smallest among its
+    n_neighbors edges), sigma_i = its FURTHEST among those n_neighbors
+    edges (the paper's own rho_i/sigma_i, Eq. 5.6 and the surrounding
+    text). Within a single node i's own star graph this is symmetric
+    (d_i(x_i,x_ij) = d_i(x_ij,x_i) by construction -- both sides use i's
+    own rho_i, sigma_i); the asymmetry comes from comparing ACROSS two
+    different nodes' star graphs: edge (i,j)'s weight as seen by i's own
+    rescaling (rho_i, sigma_i) need not equal the same edge's weight as
+    seen by j's (rho_j, sigma_j), even though the raw Euclidean d(x_i,x_j)
+    is the same either way. This is not optional with randers_field=None:
+    it is the only thing that perturbs the base Euclidean distance at all
+    in that case -- without it, nothing distorts the raw distances, and
+    any asymmetry in the final D_asym would come purely from the k-NN
+    adjacency's own existence structure (edge i->j not implying j->i),
+    which is existence-asymmetry, not a real metric perturbation.
+
+    When randers_field IS given (the "generated" family's hand-designed
+    wind field), this IsUMap rescaling is skipped -- the Randers injection
+    below is that family's own, already-validated perturbation mechanism,
+    and is not layered on top of a second one.
     directed      : bool or None. None (default): directed iff
                     randers_field is given, undirected otherwise.
     return_adjacency : bool, default False. If True, also return `bln`,
@@ -90,6 +117,19 @@ def compute_dist_matrix(
     dist = X.copy() if dataIsDistMatrix else cdist(X, X, metric=metric)
     np.fill_diagonal(dist, np.inf)  # exclude self so eps auto-derivation below ignores it
 
+    # randers_field=None -> no other mechanism perturbs the raw distance at
+    # all, so IsUMap's own conformal rescaling (see the docstring above)
+    # ALWAYS runs in that case -- not a caller-facing option. randers_field
+    # given -> skipped, since the Randers injection below is that family's
+    # own, already-validated perturbation mechanism.
+    isumap_perturb = randers_field is None
+
+    # Determined up front (only depends on randers_field/directed, not on
+    # the adjacency built below) so the connectivity check right after can
+    # use the SAME notion of directedness the eventual shortest_path() call
+    # will use -- see connection= below.
+    directed_ = (randers_field is not None) if directed is None else directed
+
     if adjacency == "knn":
         # row i keeps exactly its n_neighbors smallest entries, via
         # argpartition (O(n) per row instead of a full O(n log n) sort).
@@ -102,18 +142,58 @@ def compute_dist_matrix(
             vals = dist[rows, cols]
             bln_ = np.zeros((n, n), dtype=bool)
             bln_[rows, cols] = True
-            return csr_matrix((vals, (rows, cols)), shape=(n, n)), bln_
+            return csr_matrix((vals, (rows, cols)), shape=(n, n)), bln_, rows, cols, k_val
 
-        nbg, bln = _sparse_from_knn(n_neighbors)
+        nbg, bln, _knn_rows, _knn_cols, _knn_k = _sparse_from_knn(n_neighbors)
+
+        # ── IsUMap-style conformal perturbation (Eq. 5.1) ──
+        # d_i(x_i, x_ij) = (d(x_i, x_ij) - rho_i) / sigma_i
+        # Mutates `dist` itself (not just nbg's vals) so the Randers
+        # injection block below -- which re-reads dist[rows,cols] from
+        # scratch -- sees this distorted base rather than the raw one,
+        # i.e. the two perturbations stack rather than one silently
+        # overwriting the other.
+        if isumap_perturb:
+            # _knn_k (not n_neighbors) -- _sparse_from_knn clips to n-1 when
+            # n_neighbors >= n, so this is the ACTUAL per-row neighbour
+            # count _knn_rows/_knn_cols were built with.
+            knn_dist_per_row = dist[_knn_rows, _knn_cols].reshape(n, _knn_k)
+            rho_i = knn_dist_per_row.min(axis=1)             # nearest-neighbour distance
+            sigma_i = knn_dist_per_row.max(axis=1)            # furthest-of-the-k distance
+            sigma_i_safe = np.maximum(sigma_i, 1e-10)
+            perturbed = (knn_dist_per_row - rho_i[:, None]) / sigma_i_safe[:, None]
+            # tiny floor so a self-matching (perturbed=0, i's own nearest
+            # neighbour) edge weight doesn't collapse to an exact
+            # structural zero -- scipy's sparse Dijkstra treats a literal
+            # 0 entry as "no edge", same epsilon trick as the legacy
+            # isumap port (legacy_isumap_dist_matrix.py) uses.
+            eps_floor = np.nextafter(0.0, np.float32(1.0))
+            dist[_knn_rows, _knn_cols] = np.maximum(perturbed.ravel(), eps_floor)
+            nbg = csr_matrix((dist[_knn_rows, _knn_cols], (_knn_rows, _knn_cols)), shape=(n, n))
 
         # Disconnected graph -> shortest_path would leave some pairs at
         # inf, silently breaking every downstream step. Error out with the
         # requested n_neighbors rather than silently connecting the graph
         # with a larger k than the caller asked for.
-        n_components, _ = connected_components(nbg)
+        #
+        # connection='strong' when the eventual shortest_path() call will be
+        # directed (directed_=True): nbg is asymmetric in general for
+        # adjacency="knn" (edge i->j doesn't imply j->i), and scipy's own
+        # default, connection='weak', only checks the graph is one piece
+        # with arrows ignored -- it does NOT catch a node with no directed
+        # path to/from the rest (e.g. a node that only ever appears as
+        # someone else's neighbour, never has one of its own edges leading
+        # back out to a node that can reach everyone else). Those pairs
+        # silently end up at inf after Dijkstra instead of raising here.
+        # connection='weak' is still correct/sufficient when directed_ is
+        # False (shortest_path itself will traverse edges in either
+        # direction, same notion of reachability as a weak check).
+        connection_ = "strong" if directed_ else "weak"
+        n_components, _ = connected_components(nbg, connection=connection_)
         if n_components > 1:
             raise ValueError(
-                f"adjacency='knn' with n_neighbors={n_neighbors} gives a disconnected "
+                f"adjacency='knn' with n_neighbors={n_neighbors} gives a "
+                f"{'strongly' if directed_ else ''} disconnected "
                 f"graph ({n_components} components). Increase n_neighbors, or pass "
                 f"adjacency='threshold'.")
 
@@ -150,9 +230,7 @@ def compute_dist_matrix(
         randers_update = np.einsum("ij,ij->i", X[cols] - X[rows], randers_field[rows])
         vals = dist[rows, cols] + randers_update
         nbg = csr_matrix((vals, (rows, cols)), shape=(n, n))
-        directed_ = True if directed is None else directed
-    else:
-        directed_ = False if directed is None else directed
+    # directed_ already determined above (before the connectivity check)
 
     dist_matrix_, preds_ = shortest_path(nbg, method="D", directed=directed_,
                                           return_predecessors=True)
