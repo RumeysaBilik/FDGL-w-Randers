@@ -94,6 +94,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_raw_embedding")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--no-isumap-perturb", action="store_true",
+                    help="disable IsUMap conformal distance rescaling in compute_dist_matrix (applies wherever randers_field=None). Default: perturbation ON.")
     args = p.parse_args()
     verbose = not args.quiet
 
@@ -112,7 +114,7 @@ def main():
     if verbose:
         print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
               f"(directed knn adjacency, no field)...")
-    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None,
+    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None, isumap_perturb=not args.no_isumap_perturb,
                                      directed=True, adjacency="knn")
     if verbose:
         print(f"D_asym: {D_asym.shape}  symmetric={np.allclose(D_asym, D_asym.T)}")
@@ -130,7 +132,7 @@ def main():
     np.save(os.path.join(save_dir, "asymm_matrix_raw.npy"), D_asym)
     np.save(os.path.join(save_dir, "labels_raw.npy"), y)
 
-    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+    result = fdgl_pipeline(X, omega, isumap_perturb=not args.no_isumap_perturb, k=args.k, emb_k=args.k, neg=args.neg,
                                locate_epochs=args.locate_epochs, epochs=args.epochs,
                                clip_delta=args.clip_delta, use_gravity=args.gravity,
                                gravity_strength=args.gravity_strength,

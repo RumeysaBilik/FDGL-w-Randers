@@ -80,6 +80,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mammoth_embedding_calculated")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--no-isumap-perturb", action="store_true",
+                    help="disable IsUMap conformal distance rescaling in compute_dist_matrix (applies wherever randers_field=None). Default: perturbation ON.")
     args = p.parse_args()
     verbose = not args.quiet
 
@@ -94,7 +96,7 @@ def main():
         print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
               f"(directed k-NN adjacency, no isumap normalization, no field)...")
 
-    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None, directed=True, adjacency="knn")
+    D_asym, _ = compute_dist_matrix(X, n_neighbors=args.k, randers_field=None, isumap_perturb=not args.no_isumap_perturb, directed=True, adjacency="knn")
     #D_asym = dijkstra_only_dist_matrix(X, k=args.k, verbose=verbose, directedDistances=True)
     
     emb_k = args.k
@@ -154,7 +156,7 @@ def main():
     if not args.quiet:
         print(f"wrote {args.out}_3d_drift_attached.png")
 
-    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+    result = fdgl_pipeline(X, omega, isumap_perturb=not args.no_isumap_perturb, k=args.k, emb_k=args.k, neg=args.neg,
                                locate_epochs=args.locate_epochs, epochs=args.epochs,
                                clip_delta=args.clip_delta, use_gravity=args.gravity,
                                snapshot_every=args.snapshot_every, ramp=args.ramp,

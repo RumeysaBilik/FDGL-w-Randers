@@ -38,6 +38,7 @@ def compute_dist_matrix(
         adjacency="knn",
         return_adjacency=False,
         dataIsDistMatrix=False,
+        isumap_perturb=True,
 ):
     """
     Shortest-path step always uses Dijkstra: every caller in this repo
@@ -106,6 +107,10 @@ def compute_dist_matrix(
                     Dijkstra-completed. Only makes sense combined with
                     randers_field=None, since there is no X to compute
                     X[cols]-X[rows] from.
+    isumap_perturb : bool, default True. Only has an effect when
+                    randers_field is None and adjacency="knn". True: apply
+                    the IsUMap conformal rescaling described above. False:
+                    skip it, k-NN edges keep their raw distances.
 
     Returns
     -------
@@ -122,7 +127,7 @@ def compute_dist_matrix(
     # ALWAYS runs in that case -- not a caller-facing option. randers_field
     # given -> skipped, since the Randers injection below is that family's
     # own, already-validated perturbation mechanism.
-    isumap_perturb = randers_field is None
+    isumap_perturb = isumap_perturb and (randers_field is None)
 
     # Determined up front (only depends on randers_field/directed, not on
     # the adjacency built below) so the connectivity check right after can
@@ -329,6 +334,7 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
                       apply_step=True,
                       normalize_drift_by_asymmetry=False,
                       force_model="umap", fr_k=None, negative_sampling=False,
+                      isumap_perturb=True,
                       randers_attractive=True, randers_repulsive=False,
                       B_fixed=True):
     """
@@ -400,7 +406,8 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     if verbose:
         print(f"\nLocate: building symmetric geodesic D on {2*n} augmented points...")
     D_sym_aug, _ = compute_dist_matrix(X_aug, n_neighbors=k,
-                                       randers_field=None, adjacency=adjacency)
+                                       randers_field=None, adjacency=adjacency,
+                                       isumap_perturb=isumap_perturb)
 
     if verbose:
         print(f"Locate: (real,real) block -> symmetrized Randers geodesic "
@@ -446,7 +453,8 @@ def fdgl_pipeline(X, omega, k=15, emb_k=20, neg=10, locate_epochs=500,
     # D_geo -- drift-free counterpart of D_asym, used by fdgl_low_dim
     # when randers_attractive/randers_repulsive is False (see docstring).
     D_geo, _ = compute_dist_matrix(X, n_neighbors=k,
-                                    randers_field=None, adjacency=adjacency)
+                                    randers_field=None, adjacency=adjacency,
+                                    isumap_perturb=isumap_perturb)
 
     asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
     if verbose:

@@ -178,6 +178,8 @@ def main():
     p.add_argument("--seed",   type=int, default=0)
     p.add_argument("--out",    default="swiss_embedding")
     p.add_argument("--quiet",  action="store_true")
+    p.add_argument("--no-isumap-perturb", action="store_true",
+                    help="disable IsUMap conformal distance rescaling in compute_dist_matrix (applies wherever randers_field=None). Default: perturbation ON.")
     args = p.parse_args()
 
     if not args.quiet:
@@ -204,7 +206,7 @@ def main():
     if not args.quiet:
         print(f"wrote {args.out}_3d_field.png")
 
-    result = fdgl_pipeline(X, omega, k=args.k, emb_k=args.k, neg=args.neg,
+    result = fdgl_pipeline(X, omega, isumap_perturb=not args.no_isumap_perturb, k=args.k, emb_k=args.k, neg=args.neg,
                                locate_epochs=args.locate_epochs, epochs=args.epochs,
                                clip_delta=args.clip_delta, use_gravity=args.gravity,
                                gravity_strength=args.gravity_strength,
