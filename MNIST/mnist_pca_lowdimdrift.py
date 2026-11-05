@@ -46,7 +46,8 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
 from mnist_loader import load_MNIST
-from randers_fdgl import arrow_scale, plot_caption, fdgl_low_dim
+from randers_fdgl import (arrow_scale, plot_caption, fdgl_low_dim, classical_mds,
+                           _compute_N, compute_drift, knn_mask_from_distance_matrix)
 from randers_bridge import compute_dist_matrix, asymmetry_score, reconstruct_rho
 from sphere_view import stereographic_project
 
@@ -100,6 +101,12 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="mnist_pca_lowdimdrift")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--fixed-drift", action="store_true",
+                    help="[default OFF = live drift] compute B ONCE from the initial "
+                         "embedding Y_init = classical_mds(D_asym) and freeze it for the whole "
+                         "run (B_fixed). Default: B is recomputed every epoch from the current Y.")
+    p.add_argument("--no-isumap-perturb", action="store_true",
+                    help="disable IsUMap conformal distance rescaling in compute_dist_matrix (applies wherever randers_field=None). Default: perturbation ON.")
     args = p.parse_args()
     verbose = not args.quiet
 
@@ -128,14 +135,15 @@ def main():
     if verbose:
         print(f"\nBuilding distance matrix via randers_bridge.compute_dist_matrix "
               f"(directed knn adjacency, no field)...")
-    D_asym, _, bln_asym = compute_dist_matrix(X_pca, n_neighbors=args.k, randers_field=None,
+    D_asym, _, bln_asym = compute_dist_matrix(X_pca, n_neighbors=args.k, randers_field=None, isumap_perturb=not args.no_isumap_perturb,
                                                directed=True, adjacency=args.adjacency,
                                                return_adjacency=True)
     if verbose:
         finite = np.isfinite(D_asym)
         print(f"D_asym: {D_asym.shape}  finite entries={finite.sum()}/{D_asym.size}  "
               f"symmetric={np.allclose(D_asym, D_asym.T)}")
-        asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
+    asym_per_node, asym_global = asymmetry_score(D_asym, bln_asym)
+    if verbose:
         print(f"asymmetry_score (input D_asym): global={asym_global:.4f}")
 
     np.save(os.path.join(save_dir, "asymm_matrix_pca_lowdimdrift.npy"), D_asym)
@@ -148,13 +156,23 @@ def main():
     # the initial Y (Y_init_override left at its default, None), and B is
     # recomputed every epoch from N (fixed, derived once from D_asym's own
     # asymmetry) and the CURRENT, training Y.
+    B_fixed_arr, Y_init_arr = None, None
+    if args.fixed_drift:
+        knn_mask0 = knn_mask_from_distance_matrix(D_asym, args.k)
+        N0 = _compute_N(D_asym, knn_mask=knn_mask0)
+        Y_init_arr = classical_mds(D_asym, args.proj_dim, seed=args.seed)
+        B_fixed_arr = compute_drift(N0, knn_mask0, args.k, Y_init_arr, args.clip_delta)
+        if verbose:
+            bn0 = np.linalg.norm(B_fixed_arr, axis=1)
+            print(f"\nfixed drift: B computed once from Y_init, mean||b||={bn0.mean():.4f}  "
+                  f"max||b||={bn0.max():.4f}")
     if verbose:
-        print(f"\nTraining fdgl_low_dim directly on D_asym: use_drift=True, B_fixed=None "
-              f"(live low-dim drift, old asymmds method) -- force_model={args.force_model}, "
-              f"epochs={args.epochs}...")
+        print(f"\nTraining fdgl_low_dim directly on D_asym: use_drift=True, "
+              f"B={'frozen (computed once from Y_init)' if args.fixed_drift else 'live (recomputed every epoch)'} "
+              f"-- force_model={args.force_model}, epochs={args.epochs}...")
     result = fdgl_low_dim(D_asym, n_neighbors=args.k, n_negative_samples=args.neg,
                            n_epochs=args.epochs, use_drift=True, d=args.proj_dim,
-                           B_fixed=None, Y_init_override=None,
+                           B_fixed=B_fixed_arr, Y_init_override=Y_init_arr,
                            use_gravity=args.gravity, gravity_strength=args.gravity_strength,
                            gravity_neighbor_weight=not args.no_gravity_neighbor_weight,
                            use_virtual_neighbor=not args.no_virtual_neighbor,
@@ -189,7 +207,7 @@ def main():
 
     ax.set_xticks([]); ax.set_yticks([])
     ax.set_title(plot_caption(f"MNIST (PCA {X.shape[1]}->{pca_dim}D, low-dim live drift)",
-                               "calculated", n, args.k, False, epochs=args.epochs) +
+                               "calculated", n, args.k, args.fixed_drift, epochs=args.epochs) +
                  f" | explained var={explained:.3f}", fontsize=10)
     fig.tight_layout()
     out_path = os.path.join(save_dir, f"{args.out}.png")
@@ -258,7 +276,7 @@ def main():
             axes[idx // ncols][idx % ncols].axis("off")
 
         fig2.suptitle(plot_caption(f"MNIST (PCA {X.shape[1]}->{pca_dim}D, low-dim live drift)",
-                                    "calculated", n, args.k, False, epochs=args.epochs) +
+                                    "calculated", n, args.k, args.fixed_drift, epochs=args.epochs) +
                       f" | snapshot_every={args.snapshot_every}", fontsize=11)
         if sc2 is not None:
             fig2.colorbar(sc2, ax=axes, label="digit", ticks=range(10), shrink=0.6)
